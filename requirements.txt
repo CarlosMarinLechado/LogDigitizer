@@ -1,0 +1,3 @@
+# Compatibility entry point: install only the application dependencies.
+# For tests and packaging, use requirements-dev.txt instead.
+-r requirements-runtime.txt

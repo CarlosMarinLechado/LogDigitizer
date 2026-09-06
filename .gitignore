@@ -1,0 +1,30 @@
+# Entornos virtuales
+.venv/
+.venv-packaging/
+venv/
+
+# Archivos generados por Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Compilaciones e instaladores generados
+/build/
+/dist/
+/installer_output/
+
+# Cachés de herramientas y pruebas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Credenciales y configuración local
+.env
+.env.*
+!.env.example
+
+# Archivos de Windows
+Thumbs.db
+Desktop.ini

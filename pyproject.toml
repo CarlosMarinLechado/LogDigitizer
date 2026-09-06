@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "digitalizacion-logs"
+dynamic = ["version"]
+description = "Scientific desktop application for digitizing scanned historical geophysical/petrophysical logs."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  {name = "Carlos Marín Lechado"}
+]
+dependencies = [
+  "PySide6>=6.7",
+  "QtAwesome>=1.4.2",
+  "numpy>=1.26",
+  "opencv-python>=4.10",
+  "scipy>=1.13",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8",
+  "pytest-qt>=4.4",
+  "Pillow>=10",
+]
+
+[project.scripts]
+logdigitizer = "logdigitizer.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "logdigitizer.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
