@@ -1044,6 +1044,47 @@ class MainWindow(QMainWindow):
                 self.calibration_panel.set_capture_mode(False)
         self.viewer.set_horizontal_calibration_enabled(enabled)
 
+    def _visible_depth_marker_positions(
+        self,
+        points,
+    ) -> dict[float, float]:
+        """Read current presentation X coordinates keyed by physical depth."""
+        positions: dict[float, float] = {}
+        for index, point in enumerate(points):
+            x_px = self.viewer.depth_calibration.point_image_x(index)
+            if x_px is not None:
+                positions[float(point.depth)] = float(x_px)
+        return positions
+
+    def _persist_visible_calibration_marker_positions(self) -> bool:
+        """Persist visible T-marker presentation coordinates for this image.
+
+        Only the complementary UI coordinates are stored: X for depth markers
+        and Y for curve markers. Scientific calibration values are untouched.
+        """
+        changed = False
+        segment = self.service.active_segment
+        if segment is not None and self.viewer.depth_calibration.handles:
+            points = self.service.get_depth_calibration_points(segment)
+            positions = self._visible_depth_marker_positions(points)
+            if positions:
+                changed = (
+                    self.service.set_depth_calibration_marker_positions(
+                        positions,
+                        segment,
+                    )
+                    or changed
+                )
+
+        if hasattr(self, "curve_calibration_controller"):
+            changed = (
+                self.curve_calibration_controller.persist_visible_marker_positions()
+                or changed
+            )
+        if changed:
+            self._refresh_title()
+        return changed
+
     def _add_depth_point_requested(self, x: float, y: float) -> None:
         if not self._calibration_image_ready():
             return
@@ -1083,14 +1124,23 @@ class MainWindow(QMainWindow):
         x: float,
         y: float,
     ) -> None:
-        del x  # Horizontal handle placement is deliberately not persisted.
         points = self.service.get_depth_calibration_points()
         if not 0 <= index < len(points):
             self._refresh_depth_calibration()
             return
+
+        # Capture presentation coordinates against the OLD physical depths
+        # before a scientific Y move can reorder points by pixel_y.
+        marker_positions = self._visible_depth_marker_positions(points)
+        marker_positions[float(points[index].depth)] = float(x)
+
         if abs(points[index].pixel_y - y) <= 1e-6:
-            # Pure horizontal movement is presentation-only: do not dirty the
-            # project and do not invalidate downstream scientific results.
+            # Pure horizontal movement is persisted as UI state only. It does
+            # not alter scientific depth calibration or downstream validity.
+            if self.service.set_depth_calibration_marker_positions(
+                marker_positions
+            ):
+                self._refresh_title()
             return
 
         try:
@@ -1108,8 +1158,12 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self.service.set_depth_calibration_marker_positions(
+            marker_positions
+        )
         self._refresh_depth_calibration()
         self._refresh_project_state()
+
 
     def _edit_depth_point(self, index: int) -> None:
         points = self.service.get_depth_calibration_points()
@@ -1217,12 +1271,30 @@ class MainWindow(QMainWindow):
         self.calibration_panel.set_image_available(image_ready)
 
         if image_ready and self.viewer.has_image:
-            # set_points preserves transient X by depth within the current
-            # session without serializing it into the project.
+            # Restore the complementary presentation X coordinate from the
+            # project UI metadata. A just-created/edited point supplies an
+            # explicit preferred position which wins and is persisted.
+            persisted_x = self.service.get_depth_calibration_marker_positions(
+                segment
+            )
+            marker_x = dict(persisted_x)
+            if preferred_x_by_depth:
+                marker_x.update(
+                    {
+                        float(depth): float(x_px)
+                        for depth, x_px in preferred_x_by_depth.items()
+                    }
+                )
+                if self.service.set_depth_calibration_marker_positions(
+                    marker_x,
+                    segment,
+                ):
+                    self._refresh_title()
+
             self.viewer.set_depth_calibration_points(
                 points,
                 unit,
-                preferred_x_by_depth=preferred_x_by_depth,
+                preferred_x_by_depth=marker_x or None,
             )
         else:
             self.viewer.clear_depth_calibration_points()
@@ -1244,6 +1316,7 @@ class MainWindow(QMainWindow):
             self.manual_digitization_controller.refresh()
         self._refresh_image_overlap_guides()
         self._update_navigation_hud_from_center()
+
 
     def _calibration_image_ready(self, segment=None) -> bool:
         target = segment or self.service.active_segment
@@ -1388,6 +1461,7 @@ class MainWindow(QMainWindow):
         )
 
     def save_project(self) -> None:
+        self._persist_visible_calibration_marker_positions()
         try:
             self.service.save()
         except (
@@ -1517,6 +1591,10 @@ class MainWindow(QMainWindow):
         self,
         segment_id: str,
     ) -> None:
+        # ``load_image`` clears graphical overlays. Persist their complementary
+        # UI coordinates before changing the active image so the exact T anchors
+        # can be reconstructed when this image is revisited.
+        self._persist_visible_calibration_marker_positions()
         if hasattr(self, "manual_digitization_controller"):
             self.manual_digitization_controller.abort_for_context_change()
         if hasattr(self, "automatic_digitization_controller"):
@@ -2651,6 +2729,10 @@ class MainWindow(QMainWindow):
         )
 
     def _confirm_unsaved_changes(self) -> bool:
+        # Capture marker UI state before a close/open/new decision. This also
+        # makes legacy projects persist their currently visible positions the
+        # next time they are saved.
+        self._persist_visible_calibration_marker_positions()
         if not self.service.dirty:
             return True
 

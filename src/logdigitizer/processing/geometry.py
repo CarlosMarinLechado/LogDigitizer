@@ -7,9 +7,10 @@ values.
 Standard rectification uses four corners and a projective homography. The
 optional multipoint mode keeps those outer corners but accepts additional
 left/right control pairs. Each pair represents one physical transverse section
-of the log. The selected track is then straightened band by band into a
-rectangle while the area outside the track retains the standard full-image
-homography, so the scan is not cropped.
+of the log. The selected track is straightened band by band into a rectangle,
+and the same band deformation is extrapolated laterally across the complete
+output canvas. This avoids a discontinuity at the selected track boundaries
+while preserving the full-image canvas defined by the base homography.
 """
 
 from __future__ import annotations
@@ -137,7 +138,9 @@ class MultipointTransformResult:
 
     ``base_transform`` is the ordinary four-corner full-image homography
     defined by the first and last control pairs. It determines the output
-    canvas and preserves scan content outside the selected track.
+    canvas. The multipoint field is then extended laterally across that full
+    canvas within the controlled vertical span, so no hard seam remains at the
+    selected track boundaries.
 
     ``destination_y`` stores the rectified Y coordinate assigned to every
     transverse control pair. Between consecutive pairs the track is mapped by
@@ -686,13 +689,15 @@ def rectify_image_multipoint(
     """Rectify a distorted track from corresponding left/right control pairs.
 
     The first/last pairs define the outer four-point homography and therefore
-    the complete output canvas. Pixels outside the selected rectangular track
-    retain that standard projective rectification. Pixels inside the track are
-    resampled directly from the original raster using a piecewise-bilinear mesh,
-    so each control pair becomes horizontal and both track boundaries become
-    vertical at the specified control rows.
+    the complete output canvas. Between those top/bottom reference rows, the
+    piecewise-bilinear deformation defined by the control pairs is extrapolated
+    laterally across the full canvas width. The yellow reference quadrilateral
+    therefore defines the deformation geometry; it is not a boundary where the
+    corrected raster is pasted back onto a differently warped background.
 
-    Direct source remapping avoids a second interpolation pass inside the track.
+    Rows above and below the outer control pairs retain the standard full-image
+    homography because no multipoint bending information exists there. Direct
+    source remapping avoids a second interpolation pass in the corrected rows.
     ``remap_chunk_rows`` limits temporary map memory for very large scans.
     """
     if not isinstance(image, np.ndarray):
@@ -710,7 +715,9 @@ def rectify_image_multipoint(
     )
     base = transform.base_transform
 
-    # Preserve the complete scan exactly as in the established four-point mode.
+    # Start from the complete full-image homography. Rows inside the controlled
+    # vertical span are replaced below by the continuous full-width multipoint
+    # remap; rows outside that span remain the standard homography.
     rectified = cv2.warpPerspective(
         image,
         base.transform_matrix,
@@ -729,9 +736,16 @@ def rectify_image_multipoint(
             "The multipoint reference rectangle is too small."
         )
 
+    # Correct the complete canvas width, not only the interior of the yellow
+    # reference rectangle. ``u`` is intentionally allowed to fall below 0 or
+    # above 1 in the page margins: this is a linear lateral extrapolation of
+    # the same band deformation that is already used inside the log track.
+    # Keeping the exact same formula inside [left_x, right_x] preserves the
+    # established scientific multipoint result there while removing the hard
+    # left/right seam that could duplicate page/log borders.
     x_values = np.arange(
-        left_x,
-        right_x + 1,
+        0,
+        base.output_width,
         dtype=np.float64,
     )
     u = (
@@ -812,7 +826,7 @@ def rectify_image_multipoint(
         )
         rectified[
             chunk_start:chunk_end,
-            left_x:right_x + 1,
+            :,
         ] = corrected
 
     return MultipointRectificationResult(

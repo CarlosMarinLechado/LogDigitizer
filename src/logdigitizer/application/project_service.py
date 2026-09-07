@@ -257,6 +257,7 @@ class ProjectService:
         removed = self.project.remove_segment(
             segment_id
         )
+        self._remove_calibration_marker_segment_state(segment_id)
 
         if self.active_segment_id == segment_id:
             self.active_segment_id = (
@@ -930,14 +931,29 @@ class ProjectService:
             raise IndexError(index)
 
         current = points[index]
-        points[index] = DepthCalibrationPoint(
+        updated = DepthCalibrationPoint(
             current.pixel_y if pixel_y is None else float(pixel_y),
             current.depth if depth is None else float(depth),
         )
-        return self._store_depth_calibration_points(
+        points[index] = updated
+        result = self._store_depth_calibration_points(
             points,
             self.get_depth_calibration_unit(segment),
         )
+
+        if updated.depth != current.depth:
+            marker_positions = self.get_depth_calibration_marker_positions(
+                segment
+            )
+            if current.depth in marker_positions:
+                x_px = marker_positions.pop(current.depth)
+                marker_positions[updated.depth] = x_px
+                self.set_depth_calibration_marker_positions(
+                    marker_positions,
+                    segment,
+                )
+        return result
+
 
     def remove_depth_calibration_point(
         self,
@@ -948,11 +964,21 @@ class ProjectService:
         points = list(self.get_depth_calibration_points(segment))
         if not 0 <= index < len(points):
             raise IndexError(index)
+        removed = points[index]
         del points[index]
-        return self._store_depth_calibration_points(
+        result = self._store_depth_calibration_points(
             points,
             self.get_depth_calibration_unit(segment),
         )
+        marker_positions = self.get_depth_calibration_marker_positions(segment)
+        if removed.depth in marker_positions:
+            marker_positions.pop(removed.depth, None)
+            self.set_depth_calibration_marker_positions(
+                marker_positions,
+                segment,
+            )
+        return result
+
 
     def clear_depth_calibration_points(self) -> None:
         """Clear vertical reference points without resetting the chosen unit."""
@@ -961,6 +987,8 @@ class ProjectService:
             (),
             self.get_depth_calibration_unit(segment),
         )
+        self.set_depth_calibration_marker_positions({}, segment)
+
 
     def _depth_payload(self, segment: Segment) -> dict | None:
         calibration = segment.extensions.get("calibration", {})
@@ -973,6 +1001,284 @@ class ProjectService:
         if not self.project or not self.active_segment:
             raise RuntimeError("An active project segment is required.")
         return self.active_segment
+
+    # ------------------------------------------------------------------
+    # Persisted presentation state for calibration markers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _marker_value_key(value: float) -> str:
+        """Return a stable JSON-object key for one finite physical value."""
+        number = float(value)
+        if not isfinite(number):
+            raise ValueError("Calibration marker keys must be finite.")
+        return format(number, ".17g")
+
+    def _calibration_marker_segment_payload(
+        self,
+        segment: Segment,
+        *,
+        create: bool,
+    ) -> dict | None:
+        """Return one segment's non-scientific calibration-marker UI payload."""
+        if self.project is None:
+            return None
+
+        metadata = self.project.metadata
+        ui_state = metadata.get("ui_state")
+        if not isinstance(ui_state, dict):
+            if not create:
+                return None
+            ui_state = {}
+            metadata["ui_state"] = ui_state
+
+        markers = ui_state.get("calibration_markers")
+        if not isinstance(markers, dict):
+            if not create:
+                return None
+            markers = {}
+            ui_state["calibration_markers"] = markers
+
+        payload = markers.get(segment.segment_id)
+        if not isinstance(payload, dict):
+            if not create:
+                return None
+            payload = {}
+            markers[segment.segment_id] = payload
+        return payload
+
+    @staticmethod
+    def _decode_marker_mapping(raw: object) -> dict[float, float]:
+        if not isinstance(raw, dict):
+            return {}
+        decoded: dict[float, float] = {}
+        for key, value in raw.items():
+            try:
+                physical = float(key)
+                coordinate = float(value)
+            except (TypeError, ValueError):
+                continue
+            if isfinite(physical) and isfinite(coordinate):
+                decoded[physical] = coordinate
+        return decoded
+
+    @classmethod
+    def _encode_marker_mapping(
+        cls,
+        positions: dict[float, float],
+    ) -> dict[str, float]:
+        encoded: dict[str, float] = {}
+        for key, value in positions.items():
+            physical = float(key)
+            coordinate = float(value)
+            if not isfinite(physical) or not isfinite(coordinate):
+                raise ValueError(
+                    "Calibration marker positions must contain finite values."
+                )
+            encoded[cls._marker_value_key(physical)] = coordinate
+        return encoded
+
+    def get_depth_calibration_marker_positions(
+        self,
+        segment: Segment | None = None,
+    ) -> dict[float, float]:
+        """Return persisted presentation X positions keyed by physical depth.
+
+        These coordinates are UI state only. Scientific depth calibration still
+        stores only ``pixel_y`` plus the physical depth value.
+        """
+        target = segment or self.active_segment
+        if self.project is None or target is None:
+            return {}
+        payload = self._calibration_marker_segment_payload(
+            target,
+            create=False,
+        )
+        if not isinstance(payload, dict):
+            return {}
+        depth = payload.get("depth")
+        if not isinstance(depth, dict):
+            return {}
+        return self._decode_marker_mapping(depth.get("x_by_depth"))
+
+    def set_depth_calibration_marker_positions(
+        self,
+        positions: dict[float, float],
+        segment: Segment | None = None,
+    ) -> bool:
+        """Persist presentation X positions for one image's depth T markers."""
+        target = segment or self.active_segment
+        if self.project is None or target is None:
+            return False
+
+        normalized = {
+            float(key): float(value)
+            for key, value in dict(positions).items()
+        }
+        encoded = self._encode_marker_mapping(normalized)
+        if self.get_depth_calibration_marker_positions(target) == normalized:
+            return False
+
+        payload = self._calibration_marker_segment_payload(
+            target,
+            create=True,
+        )
+        assert payload is not None
+        depth = payload.get("depth")
+        if not isinstance(depth, dict):
+            depth = {}
+
+        if encoded:
+            depth["x_by_depth"] = encoded
+            payload["depth"] = depth
+        else:
+            depth.pop("x_by_depth", None)
+            if depth:
+                payload["depth"] = depth
+            else:
+                payload.pop("depth", None)
+
+        self.project.touch()
+        self.dirty = True
+        return True
+
+    def get_horizontal_calibration_marker_positions(
+        self,
+        curve_id: str,
+        segment: Segment | None = None,
+        *,
+        scale_id: str = DEFAULT_HORIZONTAL_SCALE_ID,
+    ) -> dict[float, float]:
+        """Return persisted presentation Y positions keyed by physical X value."""
+        target = segment or self.active_segment
+        if self.project is None or target is None:
+            return {}
+        payload = self._calibration_marker_segment_payload(
+            target,
+            create=False,
+        )
+        if not isinstance(payload, dict):
+            return {}
+        horizontal = payload.get("horizontal")
+        if not isinstance(horizontal, dict):
+            return {}
+        curve_payload = horizontal.get(str(curve_id))
+        if not isinstance(curve_payload, dict):
+            return {}
+        scale_payload = curve_payload.get(str(scale_id))
+        if not isinstance(scale_payload, dict):
+            return {}
+        return self._decode_marker_mapping(
+            scale_payload.get("y_by_value")
+        )
+
+    def set_horizontal_calibration_marker_positions(
+        self,
+        curve_id: str,
+        positions: dict[float, float],
+        segment: Segment | None = None,
+        *,
+        scale_id: str = DEFAULT_HORIZONTAL_SCALE_ID,
+    ) -> bool:
+        """Persist presentation Y positions for one curve scale's T markers."""
+        target = segment or self.active_segment
+        if self.project is None or target is None:
+            return False
+
+        normalized = {
+            float(key): float(value)
+            for key, value in dict(positions).items()
+        }
+        encoded = self._encode_marker_mapping(normalized)
+        if (
+            self.get_horizontal_calibration_marker_positions(
+                curve_id,
+                target,
+                scale_id=scale_id,
+            )
+            == normalized
+        ):
+            return False
+
+        payload = self._calibration_marker_segment_payload(
+            target,
+            create=True,
+        )
+        assert payload is not None
+
+        horizontal = payload.get("horizontal")
+        if not isinstance(horizontal, dict):
+            horizontal = {}
+        curve_key = str(curve_id)
+        scale_key = str(scale_id)
+        curve_payload = horizontal.get(curve_key)
+        if not isinstance(curve_payload, dict):
+            curve_payload = {}
+        scale_payload = curve_payload.get(scale_key)
+        if not isinstance(scale_payload, dict):
+            scale_payload = {}
+
+        if encoded:
+            scale_payload["y_by_value"] = encoded
+            curve_payload[scale_key] = scale_payload
+            horizontal[curve_key] = curve_payload
+            payload["horizontal"] = horizontal
+        else:
+            scale_payload.pop("y_by_value", None)
+            if scale_payload:
+                curve_payload[scale_key] = scale_payload
+            else:
+                curve_payload.pop(scale_key, None)
+            if curve_payload:
+                horizontal[curve_key] = curve_payload
+            else:
+                horizontal.pop(curve_key, None)
+            if horizontal:
+                payload["horizontal"] = horizontal
+            else:
+                payload.pop("horizontal", None)
+
+        self.project.touch()
+        self.dirty = True
+        return True
+
+    def _remove_calibration_marker_segment_state(
+        self,
+        segment_id: str,
+    ) -> None:
+        """Drop stale marker UI state when an image is removed."""
+        if self.project is None:
+            return
+        ui_state = self.project.metadata.get("ui_state")
+        if not isinstance(ui_state, dict):
+            return
+        markers = ui_state.get("calibration_markers")
+        if not isinstance(markers, dict):
+            return
+        markers.pop(str(segment_id), None)
+
+    def _remove_horizontal_marker_curve_state(
+        self,
+        curve_id: str,
+    ) -> None:
+        """Drop stale marker UI state for a deleted global curve."""
+        if self.project is None:
+            return
+        ui_state = self.project.metadata.get("ui_state")
+        if not isinstance(ui_state, dict):
+            return
+        markers = ui_state.get("calibration_markers")
+        if not isinstance(markers, dict):
+            return
+        for payload in markers.values():
+            if not isinstance(payload, dict):
+                continue
+            horizontal = payload.get("horizontal")
+            if not isinstance(horizontal, dict):
+                continue
+            horizontal.pop(str(curve_id), None)
+            if not horizontal:
+                payload.pop("horizontal", None)
 
     def _store_depth_calibration_points(
         self,
@@ -1161,6 +1467,7 @@ class ProjectService:
             curve = self.project.remove_curve(curve_id)
         except KeyError:
             raise
+        self._remove_horizontal_marker_curve_state(curve_id)
 
         for segment in self.project.segments:
             calibration_payload = segment.extensions.get("calibration", {})
@@ -1585,15 +1892,36 @@ class ProjectService:
         if not 0 <= index < len(points):
             raise IndexError(index)
         current = points[index]
-        points[index] = HorizontalCalibrationPoint(
+        updated = HorizontalCalibrationPoint(
             current.pixel_x if pixel_x is None else float(pixel_x),
             current.value if value is None else float(value),
         )
-        return self._store_horizontal_calibration_points(
+        points[index] = updated
+        result = self._store_horizontal_calibration_points(
             curve,
             points,
             scale_id=scale_id,
         )
+
+        if updated.value != current.value:
+            marker_positions = (
+                self.get_horizontal_calibration_marker_positions(
+                    curve_id,
+                    segment,
+                    scale_id=scale_id,
+                )
+            )
+            if current.value in marker_positions:
+                y_px = marker_positions.pop(current.value)
+                marker_positions[updated.value] = y_px
+                self.set_horizontal_calibration_marker_positions(
+                    curve_id,
+                    marker_positions,
+                    segment,
+                    scale_id=scale_id,
+                )
+        return result
+
 
     def remove_horizontal_calibration_point(
         self,
@@ -1614,12 +1942,28 @@ class ProjectService:
         )
         if not 0 <= index < len(points):
             raise IndexError(index)
+        removed = points[index]
         del points[index]
-        return self._store_horizontal_calibration_points(
+        result = self._store_horizontal_calibration_points(
             curve,
             points,
             scale_id=scale_id,
         )
+        marker_positions = self.get_horizontal_calibration_marker_positions(
+            curve_id,
+            segment,
+            scale_id=scale_id,
+        )
+        if removed.value in marker_positions:
+            marker_positions.pop(removed.value, None)
+            self.set_horizontal_calibration_marker_positions(
+                curve_id,
+                marker_positions,
+                segment,
+                scale_id=scale_id,
+            )
+        return result
+
 
     def clear_horizontal_calibration_points(
         self,
@@ -1629,12 +1973,19 @@ class ProjectService:
     ) -> None:
         """Clear X references for one curve in the active segment only."""
         curve = self.get_curve(curve_id)
-        self._require_active_segment()
+        segment = self._require_active_segment()
         self._store_horizontal_calibration_points(
             curve,
             (),
             scale_id=scale_id,
         )
+        self.set_horizontal_calibration_marker_positions(
+            curve_id,
+            {},
+            segment,
+            scale_id=scale_id,
+        )
+
 
     def add_horizontal_scale(self, curve_id: str) -> HorizontalScaleProfile:
         """Create one empty additional scale after existing scales are valid."""
@@ -1684,6 +2035,12 @@ class ProjectService:
             )
         removed = profiles.pop(index)
         self._store_horizontal_scale_profiles(curve, profiles)
+        self.set_horizontal_calibration_marker_positions(
+            curve_id,
+            {},
+            segment,
+            scale_id=requested,
+        )
         return removed
 
     def _horizontal_payload(

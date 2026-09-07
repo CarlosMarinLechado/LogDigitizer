@@ -86,6 +86,58 @@ class CurveCalibrationController(QObject):
     def active_curve_id(self) -> str | None:
         return self._active_curve_id
 
+    def _visible_marker_positions(
+        self,
+        points,
+    ) -> dict[float, float]:
+        """Read current presentation Y coordinates keyed by physical value."""
+        positions: dict[float, float] = {}
+        for index, point in enumerate(points):
+            y_px = self.viewer.horizontal_calibration.point_image_y(index)
+            if y_px is not None:
+                positions[float(point.value)] = float(y_px)
+        return positions
+
+    def persist_visible_marker_positions(self) -> bool:
+        """Persist the currently visible X-calibration T positions.
+
+        Scientific X calibration remains unchanged; only the transient Y
+        presentation coordinate is written to project ``metadata.ui_state``.
+        """
+        segment = self.service.active_segment
+        curve_id = self._active_curve_id
+        scale_id = self._active_scale_id
+        if (
+            segment is None
+            or curve_id is None
+            or not self.viewer.horizontal_calibration.handles
+        ):
+            return False
+
+        try:
+            points = self.service.get_horizontal_calibration_points(
+                curve_id,
+                segment,
+                scale_id=scale_id,
+            )
+        except (KeyError, RuntimeError):
+            return False
+        if not points:
+            return False
+
+        positions = self._visible_marker_positions(points)
+        if not positions:
+            return False
+        changed = self.service.set_horizontal_calibration_marker_positions(
+            curve_id,
+            positions,
+            segment,
+            scale_id=scale_id,
+        )
+        if changed:
+            self._title_refresh_callback()
+        return changed
+
     def can_capture(self) -> bool:
         curve_id = self.panel.selected_curve_id
         if curve_id is None or not self._image_ready():
@@ -125,6 +177,21 @@ class CurveCalibrationController(QObject):
         selected_curve_id: str | None = None,
         selected_scale_id: str | None = None,
     ) -> None:
+        # Before an explicit curve/scale context change, preserve the visible
+        # presentation Y coordinates of the T markers that are about to vanish.
+        if (
+            selected_curve_id is not None
+            and self._active_curve_id is not None
+            and selected_curve_id != self._active_curve_id
+        ):
+            self.persist_visible_marker_positions()
+        elif (
+            selected_scale_id is not None
+            and self._active_curve_id is not None
+            and selected_scale_id != self._active_scale_id
+        ):
+            self.persist_visible_marker_positions()
+
         project = self.service.project
         curves = self.service.get_curves()
         self.panel.set_project_available(project is not None)
@@ -208,15 +275,40 @@ class CurveCalibrationController(QObject):
         )
 
         if present and image_ready and self.viewer.has_image:
-            # Use the selected curve's display color only for the short vertical
-            # X-calibration marks. Labels and selected/drag states remain unchanged.
+            # Restore the presentation Y coordinates stored separately from the
+            # scientific X calibration. Explicit preferred positions (new/edit
+            # clicks) win and are persisted for subsequent image/project reloads.
+            persisted_y = (
+                self.service.get_horizontal_calibration_marker_positions(
+                    curve.curve_id,
+                    segment,
+                    scale_id=self._active_scale_id,
+                )
+            )
+            marker_y = dict(persisted_y)
+            if preferred_y_by_value:
+                marker_y.update(
+                    {
+                        float(value): float(y_px)
+                        for value, y_px in preferred_y_by_value.items()
+                    }
+                )
+                if self.service.set_horizontal_calibration_marker_positions(
+                    curve.curve_id,
+                    marker_y,
+                    segment,
+                    scale_id=self._active_scale_id,
+                ):
+                    self._title_refresh_callback()
+
+            # Use the selected curve's display color for its T markers.
             self.viewer.horizontal_calibration.set_mark_color(
                 curve.display_color
             )
             self.viewer.set_horizontal_calibration_points(
                 points,
                 curve.unit,
-                preferred_y_by_value=preferred_y_by_value,
+                preferred_y_by_value=marker_y or None,
             )
         else:
             self.viewer.clear_horizontal_calibration_points()
@@ -407,11 +499,13 @@ class CurveCalibrationController(QObject):
         return path is not None and path.is_file()
 
     def _curve_selected(self, curve_id: str) -> None:
+        self.persist_visible_marker_positions()
         self._active_curve_id = curve_id
         self._active_scale_id = DEFAULT_HORIZONTAL_SCALE_ID
         self.refresh(selected_curve_id=curve_id)
 
     def _scale_selected(self, curve_id: str, scale_id: str) -> None:
+        self.persist_visible_marker_positions()
         self._active_curve_id = curve_id
         self._active_scale_id = scale_id
         self.refresh(
@@ -641,7 +735,6 @@ class CurveCalibrationController(QObject):
         x: float,
         y: float,
     ) -> None:
-        del y  # Vertical placement is presentation-only and never persisted.
         curve = self._selected_curve()
         if curve is None:
             return
@@ -653,8 +746,21 @@ class CurveCalibrationController(QObject):
         if not 0 <= index < len(points):
             self.refresh(selected_curve_id=curve.curve_id)
             return
+
+        # Capture presentation coordinates against the OLD physical values
+        # before a scientific X move can reorder points by pixel_x.
+        marker_positions = self._visible_marker_positions(points)
+        marker_positions[float(points[index].value)] = float(y)
+
         if abs(points[index].pixel_x - x) <= 1e-6:
-            # Pure vertical drag must not dirty the project.
+            # Pure vertical movement is now persisted as UI state only. It does
+            # not alter scientific X calibration or invalidate downstream work.
+            if self.service.set_horizontal_calibration_marker_positions(
+                curve.curve_id,
+                marker_positions,
+                scale_id=scale_id,
+            ):
+                self._title_refresh_callback()
             return
 
         try:
@@ -674,11 +780,18 @@ class CurveCalibrationController(QObject):
                 6000,
             )
             return
+
+        self.service.set_horizontal_calibration_marker_positions(
+            curve.curve_id,
+            marker_positions,
+            scale_id=scale_id,
+        )
         self.refresh(
             selected_curve_id=curve.curve_id,
             selected_scale_id=scale_id,
         )
         self._title_refresh_callback()
+
 
     def _edit_selected_handle(self, index: int) -> None:
         curve = self._selected_curve()
