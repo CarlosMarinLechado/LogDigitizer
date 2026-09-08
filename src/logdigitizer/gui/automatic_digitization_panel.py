@@ -34,8 +34,9 @@ AUTOMATIC_TRACE_HELP = (
     "resumes from the new point.\n"
     "\u2022 Click Finish to save the automatic trace.\n\n"
     "Clear draft discards only the unfinished automatic trace.\n\n"
-    "Erase range activates a drag tool over a saved automatic curve. The "
-    "selected vertical range is removed and manual digitization is preserved.\n\n"
+    "Erase range activates a vertical selection tool anywhere on the image. "
+    "Automatic trace geometry inside the selected Y range is removed; "
+    "manual digitization is preserved.\n\n"
     "The curve, scale, scale offset and tracker settings are locked while an "
     "automatic trace is active. Line width is detected automatically from the "
     "initial click."
@@ -180,9 +181,9 @@ class AutomaticDigitizationPanel(DigitizationPanel):
             "eraser",
             "Erase automatic range",
             tooltip=(
-                "Activate erase mode, then drag over a saved automatic curve. "
-                "The selected vertical range is removed; manual digitization "
-                "is preserved."
+                "Activate erase mode, then drag vertically anywhere on the image. "
+                "Automatic trace geometry in the selected Y range is removed; "
+                "manual digitization is preserved."
             ),
         )
         self.automatic_erase_button.setCheckable(True)

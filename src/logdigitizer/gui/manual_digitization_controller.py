@@ -32,8 +32,6 @@ class ManualDigitizationController(QObject):
     """Coordinate trace creation and saved-node editing without widget domain logic."""
 
     MIN_INSERT_VERTICAL_GAP_PX = 0.25
-    ERASER_HIT_HORIZONTAL_TOLERANCE_PX = 12.0
-    ERASER_HIT_VERTICAL_TOLERANCE_PX = 3.0
 
     def __init__(
         self,
@@ -58,6 +56,11 @@ class ManualDigitizationController(QObject):
         self._active_curve_id: str | None = None
         self._active_scale_id: str | None = None
         self._active_scale_offset: int | None = None
+        # Manual mode is a session: right-click saves the current section and
+        # immediately arms the canvas for the next one. This flag lets the
+        # panel keep Finish available after at least one section has been saved,
+        # even while the next draft is still empty.
+        self._manual_session_has_saved_section = False
         self._editing_curve_id: str | None = None
         self._selected_section_id: str | None = None
         self._selected_node_index: int | None = None
@@ -104,7 +107,7 @@ class ManualDigitizationController(QObject):
 
         panel.curveSelectionChanged.connect(self._curve_selected)
         panel.manualStartRequested.connect(self.start_manual_trace)
-        panel.manualFinishRequested.connect(self.finish_manual_trace)
+        panel.manualFinishRequested.connect(self.finish_manual_session)
         panel.manualCancelRequested.connect(self.cancel_manual_trace)
         erase_signal = getattr(panel, "automaticEraseToggled", None)
         if erase_signal is not None:
@@ -466,9 +469,10 @@ class ManualDigitizationController(QObject):
             can_start=can_start,
             can_edit=can_edit,
         )
-        self.panel.set_draft_state(
+        self.panel.set_manual_draft_state(
             self.tracing,
             len(self.viewer.manual_digitization_points),
+            can_finish_empty_session=self._manual_session_has_saved_section,
         )
         self.panel.set_edit_state(
             self.editing,
@@ -547,8 +551,8 @@ class ManualDigitizationController(QObject):
         self._set_panel_automatic_erase_state(True)
         self._viewport.setCursor(Qt.CursorShape.CrossCursor)
         self._message_callback(
-            "Automatic eraser active. Press on the saved automatic trace and "
-            "drag vertically; release to erase that Y range.",
+            "Automatic eraser active. Drag vertically anywhere on the image; "
+            "release to erase automatic trace geometry in that Y range.",
             6500,
         )
 
@@ -617,6 +621,13 @@ class ManualDigitizationController(QObject):
         return False
 
     def _begin_automatic_erase_drag(self, event: QMouseEvent) -> None:
+        """Start a vertical erase range anywhere inside the image raster.
+
+        Erase mode is intentionally a Y-range selection tool, not a trace
+        hit-testing tool. The drag X position is therefore irrelevant: saved
+        automatic geometry for the selected curve is clipped only by the
+        selected vertical interval.
+        """
         if not self._erase_context_is_current():
             self._deactivate_automatic_eraser(refresh=True)
             self._message_callback(
@@ -627,19 +638,13 @@ class ManualDigitizationController(QObject):
         image_point = self.viewer.viewport_to_image(event.position())
         if image_point is None:
             return
-        point = TracePoint(float(image_point.x()), float(image_point.y()))
-        if not self._point_hits_automatic_trace(point):
-            self._message_callback(
-                "Start the erase drag directly on the selected automatic trace.",
-                4500,
-            )
-            return
 
-        self._erase_drag_start_y_px = point.y_px
-        self._erase_drag_current_y_px = point.y_px
+        start_y = float(image_point.y())
+        self._erase_drag_start_y_px = start_y
+        self._erase_drag_current_y_px = start_y
         self.automatic_trace_eraser.set_range(
-            point.y_px,
-            point.y_px,
+            start_y,
+            start_y,
             image_width_px=self._erase_image_width_px,
         )
         self._viewport.setCursor(Qt.CursorShape.SizeVerCursor)
@@ -677,40 +682,6 @@ class ManualDigitizationController(QObject):
             and self.service.active_segment_id == self._erase_segment_id
             and self.panel.selected_curve_id == self._erase_curve_id
         )
-
-    def _point_hits_automatic_trace(self, point: TracePoint) -> bool:
-        curve_id = self._erase_curve_id
-        if curve_id is None:
-            return False
-        try:
-            digitized = self.service.get_digitized_curve(curve_id)
-        except (KeyError, RuntimeError):
-            return False
-        if digitized is None:
-            return False
-
-        for section in digitized.sections:
-            if section.source is not TraceSource.AUTOMATIC:
-                continue
-            samples = (
-                section.raw_samples_px
-                if section.raw_samples_px
-                else section.control_points_px
-            )
-            if not samples:
-                continue
-            nearest = min(
-                samples,
-                key=lambda sample: abs(sample.y_px - point.y_px),
-            )
-            if (
-                abs(nearest.y_px - point.y_px)
-                <= self.ERASER_HIT_VERTICAL_TOLERANCE_PX
-                and abs(nearest.x_px - point.x_px)
-                <= self.ERASER_HIT_HORIZONTAL_TOLERANCE_PX
-            ):
-                return True
-        return False
 
     def _apply_automatic_erase_range(
         self,
@@ -833,8 +804,13 @@ class ManualDigitizationController(QObject):
         self._active_curve_id = curve_id
         self._active_scale_id = scale_id
         self._active_scale_offset = self.panel.scale_offset
+        self._manual_session_has_saved_section = False
         self.viewer.set_manual_digitization_enabled(True)
-        self.panel.set_draft_state(True, 0)
+        self.panel.set_manual_draft_state(
+            True,
+            0,
+            can_finish_empty_session=False,
+        )
         self._refresh_saved_overlay(
             self.service.get_curves(),
             active_curve_id=curve_id,
@@ -847,19 +823,66 @@ class ManualDigitizationController(QObject):
                 if self._active_scale_offset
                 else ""
             )
-            + ". Add at least two points.",
-            5000,
+            + ". Add at least two points. Right-click saves each section "
+            "and keeps manual mode active.",
+            6000,
         )
 
     def finish_manual_trace(self) -> None:
-        """Persist a manual trace, replacing saved geometry in its Y range."""
+        """Save the current manual section and keep manual mode active.
+
+        This method is bound to right-click on the image. Finishing one section
+        clears only the transient draft; the selected curve, scale, offset and
+        canvas capture mode remain active so the next left-click immediately
+        starts another independent manual section.
+        """
+        if not self.tracing:
+            return
+        if not self.viewer.manual_digitization_points:
+            # Right-click on an empty armed canvas is intentionally a no-op.
+            return
+        self._persist_manual_section(continue_session=True)
+
+    def finish_manual_session(self) -> None:
+        """Save any valid current draft and leave continuous manual mode.
+
+        The visible Finish button ends the whole manual session. If the user has
+        already right-clicked the last section, the draft is empty and Finish
+        simply leaves manual mode. If a valid section is still in progress, it
+        is saved first. A one-point draft is retained so it cannot be discarded
+        silently.
+        """
+        if not self.tracing:
+            return
+
+        node_count = len(self.viewer.manual_digitization_points)
+        if node_count == 0:
+            curve_id = self._active_curve_id
+            self._end_manual_session()
+            self.refresh(selected_curve_id=curve_id)
+            self._message_callback("Manual digitization finished.", 3500)
+            return
+        if node_count < 2:
+            self._message_callback(
+                "Add a second point, or use Cancel to discard the unfinished "
+                "manual section.",
+                5000,
+            )
+            return
+
+        self._persist_manual_section(continue_session=False)
+
+    def _persist_manual_section(self, *, continue_session: bool) -> None:
+        """Persist the current draft using the established manual-override rules."""
         curve_id = self._active_curve_id
         if curve_id is None:
             return
 
         try:
             section = self.viewer.manual_digitization.draft.finish()
-            section.set_scale_id(self._active_scale_id or self.panel.selected_scale_id)
+            section.set_scale_id(
+                self._active_scale_id or self.panel.selected_scale_id
+            )
             section.set_scale_offset(self._active_scale_offset or 0)
             existing = self.service.get_digitized_curve(curve_id)
             digitized = (
@@ -895,34 +918,60 @@ class ManualDigitizationController(QObject):
                 self._error_callback("Cannot finish manual trace", exc)
             return
 
-        self.viewer.set_manual_digitization_enabled(False)
-        self._active_curve_id = None
-        self._active_scale_id = None
-        self._active_scale_offset = None
         self.viewer.clear_manual_digitization_draft()
-        self.panel.set_draft_state(False, 0)
         self._title_refresh_callback()
-        self.refresh(selected_curve_id=curve_id)
+
         offset_suffix = (
             f" Offset {section.scale_offset:+d} scale."
             if section.scale_offset
             else ""
         )
         if automatic_sections_affected:
-            self._message_callback(
+            saved_message = (
                 f"Manual correction saved for {curve.mnemonic}; automatic "
                 f"trace replaced between Y={section.start_y_px:.1f} and "
                 f"Y={section.end_y_px:.1f} px."
-                + offset_suffix,
-                5500,
+                + offset_suffix
             )
         else:
-            self._message_callback(
+            saved_message = (
                 f"Manual section saved for {curve.mnemonic} "
                 f"({len(section.control_points_px)} control points)."
-                + offset_suffix,
-                5000,
+                + offset_suffix
             )
+
+        if continue_session:
+            self._manual_session_has_saved_section = True
+            self.viewer.set_manual_digitization_enabled(True)
+            self.refresh(selected_curve_id=curve_id)
+            self._message_callback(
+                saved_message
+                + " Continue with the next section, or press Finish to leave "
+                "manual mode.",
+                6500,
+            )
+            return
+
+        self._end_manual_session()
+        self.refresh(selected_curve_id=curve_id)
+        self._message_callback(
+            saved_message + " Manual digitization finished.",
+            5500,
+        )
+
+    def _end_manual_session(self) -> None:
+        """Leave manual creation mode without changing already saved sections."""
+        self.viewer.set_manual_digitization_enabled(False)
+        self.viewer.clear_manual_digitization_draft()
+        self._active_curve_id = None
+        self._active_scale_id = None
+        self._active_scale_offset = None
+        self._manual_session_has_saved_section = False
+        self.panel.set_manual_draft_state(
+            False,
+            0,
+            can_finish_empty_session=False,
+        )
 
     def cancel_manual_trace(self) -> None:
         """Discard the transient draft without changing persistent project data."""
@@ -937,7 +986,12 @@ class ManualDigitizationController(QObject):
         self._active_curve_id = None
         self._active_scale_id = None
         self._active_scale_offset = None
-        self.panel.set_draft_state(False, 0)
+        self._manual_session_has_saved_section = False
+        self.panel.set_manual_draft_state(
+            False,
+            0,
+            can_finish_empty_session=False,
+        )
         self.refresh(selected_curve_id=curve_id)
         self._message_callback("Manual trace cancelled.", 3500)
 
@@ -1026,6 +1080,7 @@ class ManualDigitizationController(QObject):
         self._active_curve_id = None
         self._active_scale_id = None
         self._active_scale_offset = None
+        self._manual_session_has_saved_section = False
         self._clear_edit_selection()
         self.undo_stack.clear()
         self._undo_context_segment_id = self.service.active_segment_id
@@ -2043,7 +2098,7 @@ class ManualDigitizationController(QObject):
 
     def _points_changed(self, points) -> None:
         if self._active_curve_id is not None:
-            self.panel.set_draft_state(True, len(points))
+            self.panel.set_manual_draft_state(True, len(points))
 
     def _point_rejected(self, message: str) -> None:
         self._message_callback(f"Point rejected: {message}", 5000)

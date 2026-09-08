@@ -149,7 +149,10 @@ def test_finish_persists_manual_section_and_marks_project_dirty(
     assert window.viewer.manual_digitization_enabled is False
 
 
-def test_right_click_finishes_active_manual_trace(qtbot, tmp_path: Path) -> None:
+def test_right_click_saves_manual_section_and_keeps_session_active(
+    qtbot,
+    tmp_path: Path,
+) -> None:
     service, curve_id = make_service(tmp_path)
     service.save()
     window = make_window(qtbot, service)
@@ -160,7 +163,6 @@ def test_right_click_finishes_active_manual_trace(qtbot, tmp_path: Path) -> None
     qtbot.mouseClick(panel.start_button, Qt.MouseButton.LeftButton)
     assert window.viewer.manual_digitization.add_point(30.0, 25.0)
     assert window.viewer.manual_digitization.add_point(45.0, 75.0)
-    assert panel.finish_button.isEnabled()
 
     qtbot.mouseClick(
         window.viewer.viewport(),
@@ -172,9 +174,103 @@ def test_right_click_finishes_active_manual_trace(qtbot, tmp_path: Path) -> None
     assert persisted is not None
     assert len(persisted.sections) == 1
     assert persisted.sections[0].source is TraceSource.MANUAL
+    assert window.manual_digitization_controller.tracing is True
+    assert window.viewer.manual_digitization_enabled is True
+    assert window.viewer.manual_digitization_points == ()
+    assert panel.finish_button.isEnabled()
+    assert service.dirty is True
+
+
+def test_continuous_manual_session_starts_second_section_without_start_button(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    service, curve_id = make_service(tmp_path)
+    window = make_window(qtbot, service)
+    panel = window.digitization_panel
+    panel.curve_combo.setCurrentIndex(panel.curve_combo.findData(curve_id))
+    window.manual_digitization_controller.refresh(selected_curve_id=curve_id)
+
+    qtbot.mouseClick(panel.start_button, Qt.MouseButton.LeftButton)
+    assert window.viewer.manual_digitization.add_point(30.0, 25.0)
+    assert window.viewer.manual_digitization.add_point(45.0, 55.0)
+    qtbot.mouseClick(
+        window.viewer.viewport(),
+        Qt.MouseButton.RightButton,
+        pos=QPoint(20, 20),
+    )
+
+    # No second Start click: the next left-clicks build a fresh section.
+    assert window.viewer.manual_digitization.add_point(55.0, 80.0)
+    assert window.viewer.manual_digitization.add_point(65.0, 110.0)
+    qtbot.mouseClick(
+        window.viewer.viewport(),
+        Qt.MouseButton.RightButton,
+        pos=QPoint(20, 20),
+    )
+
+    persisted = service.get_digitized_curve(curve_id)
+    assert persisted is not None
+    manual_sections = [
+        section
+        for section in persisted.sections
+        if section.source is TraceSource.MANUAL
+    ]
+    assert len(manual_sections) == 2
+    assert window.manual_digitization_controller.tracing is True
+    assert window.viewer.manual_digitization_enabled is True
+    assert window.viewer.manual_digitization_points == ()
+
+
+def test_finish_button_ends_continuous_session_after_right_click_save(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    service, curve_id = make_service(tmp_path)
+    window = make_window(qtbot, service)
+    panel = window.digitization_panel
+    panel.curve_combo.setCurrentIndex(panel.curve_combo.findData(curve_id))
+    window.manual_digitization_controller.refresh(selected_curve_id=curve_id)
+
+    qtbot.mouseClick(panel.start_button, Qt.MouseButton.LeftButton)
+    assert window.viewer.manual_digitization.add_point(30.0, 25.0)
+    assert window.viewer.manual_digitization.add_point(45.0, 75.0)
+    qtbot.mouseClick(
+        window.viewer.viewport(),
+        Qt.MouseButton.RightButton,
+        pos=QPoint(20, 20),
+    )
+
+    assert panel.finish_button.isEnabled()
+    qtbot.mouseClick(panel.finish_button, Qt.MouseButton.LeftButton)
+
+    persisted = service.get_digitized_curve(curve_id)
+    assert persisted is not None
+    assert len(persisted.sections) == 1
     assert window.manual_digitization_controller.tracing is False
     assert window.viewer.manual_digitization_enabled is False
-    assert service.dirty is True
+
+
+def test_right_click_on_empty_manual_session_is_noop(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    service, curve_id = make_service(tmp_path)
+    window = make_window(qtbot, service)
+    panel = window.digitization_panel
+    panel.curve_combo.setCurrentIndex(panel.curve_combo.findData(curve_id))
+    window.manual_digitization_controller.refresh(selected_curve_id=curve_id)
+
+    qtbot.mouseClick(panel.start_button, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(
+        window.viewer.viewport(),
+        Qt.MouseButton.RightButton,
+        pos=QPoint(20, 20),
+    )
+
+    assert service.get_digitized_curve(curve_id) is None
+    assert window.manual_digitization_controller.tracing is True
+    assert window.viewer.manual_digitization_enabled is True
 
 
 def test_manual_trace_replaces_automatic_y_range_as_one_undoable_edit(

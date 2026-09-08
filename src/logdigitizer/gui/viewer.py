@@ -866,6 +866,91 @@ class ImageViewer(QGraphicsView):
         self.zoomChanged.emit(self.zoom_factor)
         self._emit_visible_center()
 
+    def focus_image_interval(
+        self,
+        *,
+        y_start_px: float,
+        y_stop_px: float,
+        anchor_y_px: float | None = None,
+        center_x_px: float | None = None,
+        context_factor: float = 3.0,
+        tight_focus: bool = False,
+    ) -> None:
+        """Zoom to a vertical image interval with useful editing context.
+
+        The zoom is derived from the interval height instead of applying a
+        fixed factor. Very small gaps retain a minimum amount of surrounding
+        image, while larger gaps are shown with proportional context.
+        """
+        if not self.has_image:
+            return
+
+        width, height = self.image_size
+        if width <= 0 or height <= 0:
+            return
+
+        low = min(float(y_start_px), float(y_stop_px))
+        high = max(float(y_start_px), float(y_stop_px))
+        low = min(max(low, 0.0), float(height))
+        high = min(max(high, 0.0), float(height))
+
+        anchor = (
+            (low + high) / 2.0
+            if anchor_y_px is None
+            else min(max(float(anchor_y_px), 0.0), float(height))
+        )
+        center_x = (
+            float(width) / 2.0
+            if center_x_px is None
+            else min(max(float(center_x_px), 0.0), float(width))
+        )
+
+        interval_height = abs(high - low)
+
+        if tight_focus:
+            # Interpolated gaps are usually tiny (often one LAS sample).
+            # Use a tighter inspection window than Review, but retain enough
+            # surrounding trace context to avoid an excessively close view.
+            # The 32-pixel floor and 2.3x interval context keep very small gaps
+            # clearly visible without over-zooming.
+            minimum_visible_height = 32.0
+            desired_visible_height = max(
+                minimum_visible_height,
+                interval_height * 2.3,
+            )
+        else:
+            # Review gaps benefit from more surrounding context because the
+            # user may need to understand how adjacent trace sections relate.
+            minimum_visible_height = max(80.0, float(height) * 0.08)
+            desired_visible_height = max(
+                minimum_visible_height,
+                interval_height * max(1.0, float(context_factor)),
+            )
+
+        desired_visible_height = min(
+            float(height),
+            desired_visible_height,
+        )
+
+        viewport_height = max(1.0, float(self.viewport().height()))
+        target_zoom = (
+            viewport_height * 0.78 / max(1.0, desired_visible_height)
+        )
+        target_zoom = min(
+            self.MAX_ZOOM,
+            max(self.MIN_ZOOM, target_zoom),
+        )
+
+        self.resetTransform()
+        self.scale(target_zoom, target_zoom)
+        self.centerOn(
+            self.image_to_scene(
+                QPointF(center_x, anchor)
+            )
+        )
+        self.zoomChanged.emit(self.zoom_factor)
+        self._emit_visible_center()
+
     def actual_size(self) -> None:
         """Set a one scene-unit to one image-pixel transform (1:1)."""
         if not self.has_image:

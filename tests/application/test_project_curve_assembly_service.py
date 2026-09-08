@@ -158,14 +158,14 @@ def test_service_builds_image_overlap_guides_from_calibrated_intervals():
     third_guides = service.get_image_overlap_guides(third)
 
     assert [(item.relation, item.depth) for item in first_guides] == [
-        (ImageOverlapRelation.NEXT, 990.0),
+        (ImageOverlapRelation.NEXT, 1000.0),
     ]
     assert [(item.relation, item.depth) for item in second_guides] == [
-        (ImageOverlapRelation.PREVIOUS, 1010.0),
-        (ImageOverlapRelation.NEXT, 1900.0),
+        (ImageOverlapRelation.PREVIOUS, 1000.0),
+        (ImageOverlapRelation.NEXT, 1950.0),
     ]
     assert [(item.relation, item.depth) for item in third_guides] == [
-        (ImageOverlapRelation.PREVIOUS, 2000.0),
+        (ImageOverlapRelation.PREVIOUS, 1950.0),
     ]
     assert first_guides[0].neighbour_segment_id == second.segment_id
     assert second_guides[0].neighbour_segment_name == "Image 1"
@@ -212,10 +212,10 @@ def test_overlap_guides_extrapolate_calibration_to_full_image_edges():
     second_guides = service.get_image_overlap_guides(second)
 
     assert [(item.relation, item.depth) for item in first_guides] == [
-        (ImageOverlapRelation.NEXT, 180.0),
+        (ImageOverlapRelation.NEXT, 195.0),
     ]
     assert [(item.relation, item.depth) for item in second_guides] == [
-        (ImageOverlapRelation.PREVIOUS, 210.0),
+        (ImageOverlapRelation.PREVIOUS, 195.0),
     ]
     assert first_guides[0].depth != 190.0
     assert second_guides[0].depth != 200.0
@@ -280,7 +280,7 @@ def test_service_builds_common_scientific_sampling_grid():
     assert sampled.values_for(curve.curve_id) == pytest.approx((25.0,) * 6)
 
 
-def test_las_gap_qc_uses_exact_displayed_guide_interval_from_raster_edges():
+def test_las_gap_qc_interpolates_small_gap_inside_full_raster_overlap():
     service = ProjectService()
     project = LogProject.create(name="P")
     curve = CurveDefinition.create(
@@ -338,10 +338,8 @@ def test_las_gap_qc_uses_exact_displayed_guide_interval_from_raster_edges():
         )
     )
 
-    # The exact visible guide pair is NEXT=180 and PREVIOUS=210. The real
-    # digitization gap (203-207) lies wholly inside that UI-defined zone and is
-    # only three STEP=1 samples wide. It must remain excluded from both QC and
-    # the generic small-gap interpolation rule.
+    # Both guides are at 195 m; the legacy helper retains full overlap bounds.
+    # The three missing samples are now filled in the LAS only.
     assert service.get_las_gap_qc_excluded_intervals(DepthUnit.METERS) == (
         (180.0, 210.0),
     )
@@ -351,7 +349,8 @@ def test_las_gap_qc_uses_exact_displayed_guide_interval_from_raster_edges():
         curve_ids=(curve.curve_id,),
     )
     assert preview.internal_gaps == ()
-    assert preview.interpolated_gaps == ()
+    assert len(preview.interpolated_gaps) == 1
+    assert preview.interpolated_gaps[0].missing_sample_count == 3
 
     plan = service.prepare_las_export(
         step_depth=1.0,
@@ -359,7 +358,7 @@ def test_las_gap_qc_uses_exact_displayed_guide_interval_from_raster_edges():
     )
     values = plan.sampled.values_for(curve.curve_id)
     for depth in (204.0, 205.0, 206.0):
-        assert values[plan.sampled.depths.index(depth)] is None
+        assert values[plan.sampled.depths.index(depth)] == pytest.approx(25.0)
 
 
 

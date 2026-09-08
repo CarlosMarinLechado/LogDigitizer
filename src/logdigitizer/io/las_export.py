@@ -397,7 +397,7 @@ def prepare_las_export(
     the LAS 2.0 specification.  Leading and trailing rows that are entirely
     NULL are removed. Approved scale/offset transitions are filled first.
     Remaining internal NULL runs of at most five LAS samples are then filled by
-    linear interpolation, except inside overlap-guide exclusion intervals.
+    linear interpolation, including inside image overlaps.
     """
     definitions, selected = _selected_las_curves(
         assemblies,
@@ -596,12 +596,10 @@ def _preview_internal_grid_gaps(
     The second contains small internal runs (at most five current LAS samples)
     that the final LAS plan will fill by linear interpolation.
 
-    ``excluded_intervals`` is the legacy project-wide exclusion list.
-    ``excluded_intervals_by_curve`` contains the exact red-guide domains for each
-    curve-specific image sequence. Both are excluded from gap warnings and generic
-    small-gap interpolation. Scale/offset transitions already approved for
-    LAS-only interpolation are counted as supported before the generic rule is
-    applied. Saved digitization and curve assembly are never modified here.
+    Legacy overlap-exclusion arguments are accepted for compatibility but ignored.
+    Scale/offset transitions already approved for LAS-only interpolation are
+    counted as supported before the generic rule is applied. Saved digitization
+    and curve assembly are never modified here.
     """
     grid_start = Decimal(str(start_depth))
     grid_stop = Decimal(str(stop_depth))
@@ -643,38 +641,6 @@ def _preview_internal_grid_gaps(
                 merged[-1][1] = max(merged[-1][1], last_index)
         return merged
 
-    def _subtract_ranges(
-        first_index: int,
-        last_index: int,
-        excluded: Sequence[Sequence[int]],
-    ) -> list[tuple[int, int]]:
-        """Return inclusive index runs not covered by excluded intervals."""
-        remaining: list[tuple[int, int]] = []
-        cursor = first_index
-        for excluded_first, excluded_last in excluded:
-            if excluded_last < cursor:
-                continue
-            if excluded_first > last_index:
-                break
-            if excluded_first > cursor:
-                remaining.append((cursor, min(last_index, excluded_first - 1)))
-            cursor = max(cursor, excluded_last + 1)
-            if cursor > last_index:
-                break
-        if cursor <= last_index:
-            remaining.append((cursor, last_index))
-        return remaining
-
-    def _intersects_ranges(
-        first_index: int,
-        last_index: int,
-        ranges: Sequence[Sequence[int]],
-    ) -> bool:
-        return any(
-            not (last_index < range_first or first_index > range_last)
-            for range_first, range_last in ranges
-        )
-
     def _gap_from_indices(
         curve: CurveDefinition,
         first_index: int,
@@ -698,42 +664,9 @@ def _preview_internal_grid_gaps(
             missing_sample_count=(last_index - first_index + 1),
         )
 
-    def _mapped_exclusion_ranges(
-        intervals: Sequence[tuple[float, float]],
-    ) -> list[list[int]]:
-        """Validate depth exclusions and map them to merged LAS-grid ranges."""
-        mapped: list[tuple[int, int]] = []
-        for supplied_start, supplied_stop in intervals:
-            try:
-                interval_start = float(supplied_start)
-                interval_stop = float(supplied_stop)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise LasExportError(
-                    "Gap-QC exclusion depths must be finite numbers."
-                ) from exc
-            if not isfinite(interval_start) or not isfinite(interval_stop):
-                raise LasExportError(
-                    "Gap-QC exclusion depths must be finite numbers."
-                )
-            interval_start, interval_stop = sorted(
-                (interval_start, interval_stop)
-            )
-            index_range = _grid_index_range(interval_start, interval_stop)
-            if index_range is not None:
-                mapped.append(index_range)
-        return _merge_ranges(mapped)
-
-    global_ignored = _mapped_exclusion_ranges(excluded_intervals)
-    specific_exclusions = excluded_intervals_by_curve or {}
-
+    # Legacy exclusion arguments are accepted for caller compatibility only.
+    # Image overlaps obey exactly the same LAS sample-count rule.
     for curve in definitions:
-        curve_specific = _mapped_exclusion_ranges(
-            specific_exclusions.get(curve.curve_id, ())
-        )
-        ignored = _merge_ranges(
-            [tuple(item) for item in global_ignored]
-            + [tuple(item) for item in curve_specific]
-        )
         assembly = selected[curve.curve_id]
         if assembly.minimum_depth is None or assembly.maximum_depth is None:
             continue
@@ -793,7 +726,6 @@ def _preview_internal_grid_gaps(
             can_interpolate = (
                 has_two_grid_neighbours
                 and missing_count <= MAX_LAS_AUTOMATIC_GAP_SAMPLES
-                and not _intersects_ranges(missing_first, missing_last, ignored)
             )
             if can_interpolate:
                 interpolated.append(
@@ -807,25 +739,18 @@ def _preview_internal_grid_gaps(
                 )
                 continue
 
-            # Overlap-guide samples remain outside QC. If a larger NULL run crosses
-            # an excluded interval, report only the samples that remain in QC scope;
-            # never treat those partial fragments as candidates for interpolation.
-            for qc_first, qc_last in _subtract_ranges(
-                missing_first,
-                missing_last,
-                ignored,
-            ):
-                if qc_first > qc_last:
-                    continue
-                gaps.append(
-                    _gap_from_indices(
-                        curve,
-                        qc_first,
-                        qc_last,
-                        curve_first_index,
-                        curve_last_index,
-                    )
+            # Every unresolved run requires review, including image overlaps.
+            # Keep the complete run; overlap boundaries must never hide or
+            # split a real NULL gap.
+            gaps.append(
+                _gap_from_indices(
+                    curve,
+                    missing_first,
+                    missing_last,
+                    curve_first_index,
+                    curve_last_index,
                 )
+            )
 
     return tuple(gaps), tuple(interpolated)
 
@@ -901,56 +826,14 @@ def _apply_las_small_gap_interpolation(
     The rule is intentionally defined in LAS-grid samples, not physical length:
     at most ``MAX_LAS_AUTOMATIC_GAP_SAMPLES`` consecutive NULL rows may be
     filled. A valid sample must exist immediately before and after the run.
-    Samples inside displayed overlap-guide exclusion intervals for that curve are
-    never filled by this generic rule. Existing real or scale-transition values
-    always win.
+    The same rule applies inside and outside image overlaps. Legacy exclusion
+    arguments are ignored. Existing real or scale-transition values always win.
     """
 
-    def _normalize_exclusions(
-        intervals: Sequence[tuple[float, float]],
-    ) -> list[tuple[float, float]]:
-        normalized: list[tuple[float, float]] = []
-        for supplied_start, supplied_stop in intervals:
-            try:
-                interval_start = float(supplied_start)
-                interval_stop = float(supplied_stop)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise LasExportError(
-                    "Gap-QC exclusion depths must be finite numbers."
-                ) from exc
-            if not isfinite(interval_start) or not isfinite(interval_stop):
-                raise LasExportError(
-                    "Gap-QC exclusion depths must be finite numbers."
-                )
-            normalized.append(
-                tuple(sorted((interval_start, interval_stop)))
-            )
-        return normalized
-
-    global_exclusions = _normalize_exclusions(excluded_intervals)
-    specific_exclusions = excluded_intervals_by_curve or {}
-
+    # Legacy exclusion arguments no longer inhibit interpolation.
     rebuilt: list[SampledCurve] = []
     changed = False
     for curve in sampled.curves:
-        normalized_exclusions = (
-            global_exclusions
-            + _normalize_exclusions(
-                specific_exclusions.get(curve.curve_id, ())
-            )
-        )
-
-        def _run_hits_exclusion(first_index: int, last_index: int) -> bool:
-            if not normalized_exclusions:
-                return False
-            for index in range(first_index, last_index + 1):
-                depth = sampled.depths[index]
-                if any(
-                    start <= depth <= stop
-                    for start, stop in normalized_exclusions
-                ):
-                    return True
-            return False
         values = list(curve.values)
         curve_changed = False
         index = 0
@@ -971,7 +854,6 @@ def _apply_las_small_gap_interpolation(
                 first_missing == 0
                 or last_missing == len(values) - 1
                 or missing_count > MAX_LAS_AUTOMATIC_GAP_SAMPLES
-                or _run_hits_exclusion(first_missing, last_missing)
             ):
                 continue
 

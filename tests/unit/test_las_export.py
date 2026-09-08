@@ -605,24 +605,22 @@ def _overlap_handoff_gap_assembly(
     return build_project_curve(curve.curve_id, (upper, lower))
 
 
-def test_gap_qc_ignores_missing_las_samples_inside_overlap_guide_zone_only():
+def test_gap_qc_interpolates_one_missing_sample_inside_overlap():
     gr = _curve("GR")
     assembly = _overlap_handoff_gap_assembly(gr)
 
     # Calibrated image overlap is 6-10 m. The two saved traces stop/start at
-    # 8 and 9 m, so STEP=0.5 places a real NULL at 8.5 m. QC intentionally does
-    # not inspect that duplicated overlap zone.
+    # 8 and 9 m, so STEP=0.5 places one missing sample at 8.5 m.
     preview = preview_las_export(
         {gr.curve_id: assembly},
         (gr,),
         0.5,
         gap_qc_excluded_intervals=((6.0, 10.0),),
     )
-    assert preview.internal_gaps == ()
     assert not preview.has_internal_gaps
+    assert preview.interpolated_gaps[0].missing_sample_count == 1
 
-    # The overlap exclusion also prevents the generic small-gap LAS interpolation.
-    # No assembly bridge is created, so the real NULL at 8.5 m is preserved.
+    # Legacy overlap exclusions no longer inhibit LAS-only interpolation.
     plan = prepare_las_export(
         {gr.curve_id: assembly},
         (gr,),
@@ -631,7 +629,7 @@ def test_gap_qc_ignores_missing_las_samples_inside_overlap_guide_zone_only():
     )
     values = plan.sampled.values_for(gr.curve_id)
     missing_index = plan.sampled.depths.index(8.5)
-    assert values[missing_index] is None
+    assert values[missing_index] == pytest.approx((values[missing_index-1] + values[missing_index+1]) / 2)
 
 
 def test_gap_qc_auto_interpolates_small_gap_outside_overlap_guide_zone():
@@ -648,12 +646,10 @@ def test_gap_qc_auto_interpolates_small_gap_outside_overlap_guide_zone():
         gap_qc_excluded_intervals=((6.0, 10.0),),
     )
 
-    # The 8-9 m handoff lies inside the 6-10 m calibrated overlap and is ignored.
-    # The one-sample 12.5 m gap lies in QC territory and is therefore classified
-    # for automatic LAS-only interpolation rather than as a warning.
+    # Both small gaps are interpolated, inside and outside the overlap.
     assert preview.internal_gaps == ()
-    assert len(preview.interpolated_gaps) == 1
-    gap = preview.interpolated_gaps[0]
+    assert len(preview.interpolated_gaps) == 2
+    gap = preview.interpolated_gaps[1]
     assert gap.mnemonic == "GR"
     assert gap.missing_start_depth == pytest.approx(12.5)
     assert gap.missing_stop_depth == pytest.approx(12.5)
@@ -855,7 +851,7 @@ def test_six_missing_las_samples_remain_null_and_require_review():
     )
 
 
-def test_generic_small_gap_interpolation_does_not_fill_overlap_exclusion():
+def test_generic_small_gap_interpolation_fills_overlap():
     gr = _curve("GR")
     assembly = _sample_count_gap_assembly(gr, missing_count=5)
     exclusion = ((5.0, 9.0),)
@@ -867,7 +863,8 @@ def test_generic_small_gap_interpolation_does_not_fill_overlap_exclusion():
         gap_qc_excluded_intervals=exclusion,
     )
     assert preview.internal_gaps == ()
-    assert preview.interpolated_gaps == ()
+    assert len(preview.interpolated_gaps) == 1
+    assert preview.interpolated_gaps[0].missing_sample_count == 5
 
     plan = prepare_las_export(
         {gr.curve_id: assembly},
@@ -877,6 +874,20 @@ def test_generic_small_gap_interpolation_does_not_fill_overlap_exclusion():
     )
     values = plan.sampled.values_for(gr.curve_id)
     assert all(
-        values[plan.sampled.depths.index(depth)] is None
+        values[plan.sampled.depths.index(depth)] is not None
         for depth in (5.0, 6.0, 7.0, 8.0, 9.0)
     )
+
+
+def test_gap_crossing_overlap_protection_is_reported_as_one_complete_run():
+    gr = _curve("GR")
+    assembly = _sample_count_gap_assembly(gr, missing_count=6)
+    preview = preview_las_export(
+        {gr.curve_id: assembly}, (gr,), 1.0,
+        gap_qc_excluded_intervals=((7.0, 8.0),),
+    )
+    assert preview.interpolated_gaps == ()
+    assert len(preview.internal_gaps) == 1
+    gap = preview.internal_gaps[0]
+    assert (gap.missing_start_depth, gap.missing_stop_depth) == (5.0, 10.0)
+    assert gap.missing_sample_count == 6

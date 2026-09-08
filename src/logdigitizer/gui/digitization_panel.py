@@ -46,13 +46,17 @@ DELETE_SECTION_TOOLTIP = (
 )
 
 START_MANUAL_HELP = (
-    "Start a manual trace\n\n"
-    "• Select the printed Scale used by the section\n"
-    "• Set Scale offset before starting a backup/wrap-around section\n"
+    "Continuous manual digitization\n\n"
+    "• Select the printed Scale used by the correction sections\n"
+    "• Set Scale offset before starting a backup/wrap-around session\n"
+    "• Click Start trace once to enter manual mode\n"
     "• Click to add control points\n"
     "• Over a saved trace, the manual line replaces the same vertical range\n"
-    "• Click Finish to save the manual trace.\n"
-    "• You can also right-click the image to finish the active trace.\n"
+    "• Right-click the image to save the current section and keep manual mode active\n"
+    "• The next left-click immediately starts a new independent manual section\n"
+    "• Click Finish to save the manual trace. Finish then leaves manual mode; "
+    "if the current draft is empty, it simply leaves manual mode\n"
+    "• Cancel discards the current unsaved draft and leaves manual mode\n"
     "• Middle-button drag pans the image while tracing."
 )
 EDIT_MANUAL_HELP = (
@@ -82,18 +86,26 @@ def _icon_button(
     *,
     tooltip: str = "",
     danger: bool = False,
+    show_text: bool = False,
 ) -> QToolButton:
-    """Create a compact icon-only tool button with semantic internal text."""
+    """Create a compact tool button, optionally with a visible action label."""
     button = QToolButton()
     button.setText(action_text)
-    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+    button.setToolButtonStyle(
+        Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        if show_text else Qt.ToolButtonStyle.ToolButtonIconOnly
+    )
     button.setIcon(
         danger_icon(icon_name)
         if danger
         else app_icon(icon_name)
     )
     button.setIconSize(QSize(18, 18))
-    button.setFixedSize(32, 32)
+    if show_text:
+        button.setFixedHeight(32)
+        button.setMinimumWidth(112)
+    else:
+        button.setFixedSize(32, 32)
     button.setAccessibleName(action_text)
     button.setToolTip(tooltip)
     return button
@@ -250,9 +262,10 @@ class DigitizationPanel(QWidget):
         # Manual digitization / Start Manual Trace
         # ------------------------------------------------------------------
         self.start_button = _icon_button(
-            "pen-to-square",
-            "Start Manual Trace",
+            "plus",
+            "Start trace",
             tooltip="Start Manual Trace",
+            show_text=True,
         )
         self.finish_button = _icon_button(
             "square-check",
@@ -277,10 +290,9 @@ class DigitizationPanel(QWidget):
         start_button_row.addStretch(1)
         start_button_row.addWidget(self.start_help_button)
 
-        self.start_manual_group = QGroupBox("Start Manual Trace")
+        self.start_manual_group = QGroupBox()
         self.start_manual_group.setStyleSheet(
-            "QGroupBox { border: none; margin-top: 14px; font-weight: 600; } "
-            "QGroupBox::title { subcontrol-origin: margin; left: 0px; padding: 0 2px; }"
+            "QGroupBox { border: none; margin-top: 0px; }"
         )
         start_manual_layout = QVBoxLayout(self.start_manual_group)
         start_manual_layout.setContentsMargins(4, 6, 4, 4)
@@ -290,9 +302,10 @@ class DigitizationPanel(QWidget):
         # Manual digitization / Edit Manual Trace
         # ------------------------------------------------------------------
         self.edit_button = _icon_button(
-            "pen-to-square",
-            "Edit Saved Trace",
+            "pen",
+            "Edit trace",
             tooltip="Edit Trace",
+            show_text=True,
         )
         self.done_edit_button = _icon_button(
             "square-check",
@@ -356,10 +369,9 @@ class DigitizationPanel(QWidget):
         edit_tools_row.addWidget(self.delete_section_button)
         edit_tools_row.addStretch(1)
 
-        self.edit_manual_group = QGroupBox("Edit Manual Trace")
+        self.edit_manual_group = QGroupBox()
         self.edit_manual_group.setStyleSheet(
-            "QGroupBox { border: none; margin-top: 14px; font-weight: 600; } "
-            "QGroupBox::title { subcontrol-origin: margin; left: 0px; padding: 0 2px; }"
+            "QGroupBox { border: none; margin-top: 0px; }"
         )
         edit_manual_layout = QVBoxLayout(self.edit_manual_group)
         edit_manual_layout.setContentsMargins(4, 6, 4, 4)
@@ -598,6 +610,25 @@ class DigitizationPanel(QWidget):
             self.join_section_button.setEnabled(False)
             self.delete_section_button.setEnabled(False)
         self._sync_scale_offset_control()
+
+    def set_manual_draft_state(
+        self,
+        tracing: bool,
+        node_count: int,
+        *,
+        can_finish_empty_session: bool = False,
+    ) -> None:
+        """Update continuous manual-session state without changing old APIs.
+
+        This intentionally calls ``self.set_draft_state`` first. On the combined
+        AutomaticDigitizationPanel that dispatches through its existing override,
+        preserving automatic-control synchronization and its historical two-
+        argument signature. Only the extra continuous-session Finish rule is
+        applied afterwards.
+        """
+        self.set_draft_state(tracing, node_count)
+        if self._tracing and bool(can_finish_empty_session):
+            self.finish_button.setEnabled(True)
 
     def set_undo_state(
         self,

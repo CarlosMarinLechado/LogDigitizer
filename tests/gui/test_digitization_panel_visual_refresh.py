@@ -34,12 +34,12 @@ def test_digitization_curve_mnemonic_uses_project_curve_color(qtbot) -> None:
     assert panel.curve_color_preview.styleSheet()
 
 
-def test_manual_inner_groups_are_borderless_but_keep_compatibility_titles(qtbot) -> None:
+def test_manual_inner_groups_are_borderless_without_redundant_titles(qtbot) -> None:
     panel = DigitizationPanel()
     qtbot.addWidget(panel)
 
-    assert panel.start_manual_group.title() == "Start Manual Trace"
-    assert panel.edit_manual_group.title() == "Edit Manual Trace"
+    assert panel.start_manual_group.title() == ""
+    assert panel.edit_manual_group.title() == ""
     assert "border: none" in panel.start_manual_group.styleSheet()
     assert "border: none" in panel.edit_manual_group.styleSheet()
 

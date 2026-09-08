@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, Qt, QUrl
+from PySide6.QtCore import QPointF, QSettings, QSize, Qt, QUrl
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -67,6 +67,7 @@ from logdigitizer.gui.manual_digitization_controller import (
 )
 from logdigitizer.gui.live_enhancement import LiveEnhancementController
 from logdigitizer.gui.preprocess_panel import PreprocessPanel
+from logdigitizer.gui.quality_control_dialog import QualityControlDialog
 from logdigitizer.gui.project_panel import ProjectPanel
 from logdigitizer.gui.rectification_preview import (
     RectificationPreviewDialog,
@@ -239,6 +240,7 @@ class MainWindow(QMainWindow):
         self.preprocess_panel = PreprocessPanel()
         self.calibration_panel = CalibrationPanel()
         self.digitization_panel = AutomaticDigitizationPanel()
+        self._quality_control_dialog: QualityControlDialog | None = None
         self._active_depth_calibration: DepthCalibration | None = None
         # Tracks which right-hand workspace most recently defined the HUD's
         # working scale context. Scientific project data are never changed.
@@ -459,6 +461,10 @@ class MainWindow(QMainWindow):
             "Add Image",
             self,
         )
+        self.quality_control_action = QAction(
+            "Quality Control",
+            self,
+        )
         self.export_las_action = QAction(
             "Export LAS…",
             self,
@@ -521,6 +527,7 @@ class MainWindow(QMainWindow):
         self.open_action.setIcon(app_icon("folder-open"))
         self.save_action.setIcon(app_icon("floppy-disk"))
         self.add_action.setIcon(app_icon("image"))
+        self.quality_control_action.setIcon(app_icon("clipboard-check"))
         self.export_las_action.setIcon(app_icon("file-export"))
         self.zoom_in_action.setIcon(app_icon("magnifying-glass-plus"))
         self.zoom_out_action.setIcon(app_icon("magnifying-glass-minus"))
@@ -531,6 +538,9 @@ class MainWindow(QMainWindow):
         self.new_action.setToolTip("New Project")
         self.open_action.setToolTip("Open Project")
         self.save_action.setToolTip("Save Project")
+        self.quality_control_action.setToolTip(
+            "Review digitization continuity and LAS sampling gaps"
+        )
         self.export_las_action.setToolTip("Export project curves to LAS 2.0")
         self.fit_action.setToolTip("Fit to Window")
 
@@ -545,6 +555,9 @@ class MainWindow(QMainWindow):
         )
         self.add_action.triggered.connect(
             self.add_images
+        )
+        self.quality_control_action.triggered.connect(
+            lambda: self.open_quality_control()
         )
         self.export_las_action.triggered.connect(
             self.export_las
@@ -594,6 +607,9 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(
             self.add_action
+        )
+        file_menu.addAction(
+            self.quality_control_action
         )
         file_menu.addAction(
             self.export_las_action
@@ -649,20 +665,26 @@ class MainWindow(QMainWindow):
 
         # Add Image remains available from File / the project panel, and 1:1
         # remains available from View / shortcut "1"; both are intentionally
-        # omitted from the compact main toolbar.
+        # omitted from the compact main toolbar. Quality Control and Export LAS
+        # keep visible labels because they are project-level workflow actions.
         for action in (
             self.new_action,
             self.open_action,
             self.save_action,
+            self.quality_control_action,
             self.export_las_action,
         ):
             toolbar.addAction(action)
 
-        export_button = toolbar.widgetForAction(self.export_las_action)
-        if export_button is not None:
-            export_button.setToolButtonStyle(
-                Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-            )
+        for labelled_action in (
+            self.quality_control_action,
+            self.export_las_action,
+        ):
+            labelled_button = toolbar.widgetForAction(labelled_action)
+            if labelled_button is not None:
+                labelled_button.setToolButtonStyle(
+                    Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+                )
 
         toolbar.addSeparator()
 
@@ -1485,6 +1507,220 @@ class MainWindow(QMainWindow):
             3000,
         )
 
+    def open_quality_control(
+        self,
+        *,
+        curve_ids: tuple[str, ...] | None = None,
+    ) -> None:
+        """Open or focus the modeless project-level Quality Control window."""
+        if not self.service.has_project or not self.service.can_export_las():
+            QMessageBox.information(
+                self,
+                "Quality Control",
+                "No digitized curves are ready for quality control.",
+            )
+            return
+
+        dialog = self._quality_control_dialog
+        if dialog is not None:
+            dialog.set_curve_filter(curve_ids)
+            dialog.sync_step_from_project()
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+
+        dialog = QualityControlDialog(
+            self.service,
+            self,
+            curve_ids=curve_ids,
+        )
+        dialog.navigationRequested.connect(
+            self._navigate_to_quality_control_issue
+        )
+        dialog.stepChanged.connect(
+            lambda _step: self._refresh_project_state()
+        )
+        dialog.destroyed.connect(
+            self._quality_control_dialog_destroyed
+        )
+        self._quality_control_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _quality_control_dialog_destroyed(self, *_args) -> None:
+        self._quality_control_dialog = None
+
+    def _navigate_to_quality_control_issue(
+        self,
+        curve_id: str,
+        segment_id: str,
+        depth: float,
+        focus_start_depth: float,
+        focus_stop_depth: float,
+        tight_focus: bool,
+    ) -> None:
+        """Select the relevant image/curve and zoom to one QC gap."""
+        if self.service.project is None:
+            return
+
+        if self.service.active_segment_id != segment_id:
+            self.select_segment(segment_id)
+            if self.service.active_segment_id != segment_id:
+                return
+
+        self.curve_calibration_controller.refresh(
+            selected_curve_id=curve_id
+        )
+        self.manual_digitization_controller.refresh(
+            selected_curve_id=curve_id
+        )
+        self.digitization_dock.raise_()
+        self.project_panel.focus_digitization_curve(
+            segment_id,
+            curve_id,
+        )
+
+        segment = self.service.active_segment
+        if segment is None or not self.viewer.has_image:
+            return
+        calibration = self.service.get_depth_calibration(segment)
+        if calibration is None:
+            return
+
+        minimum_depth = float(calibration.minimum_depth)
+        maximum_depth = float(calibration.maximum_depth)
+
+        def clamp_depth(value: float) -> float:
+            return min(
+                max(float(value), minimum_depth),
+                maximum_depth,
+            )
+
+        try:
+            target_y = depth_to_pixel_y(
+                clamp_depth(depth),
+                calibration,
+            )
+            focus_start_y = depth_to_pixel_y(
+                clamp_depth(focus_start_depth),
+                calibration,
+            )
+            focus_stop_y = depth_to_pixel_y(
+                clamp_depth(focus_stop_depth),
+                calibration,
+            )
+        except (CalibrationError, CalibrationRangeError):
+            return
+
+        center_x = self._quality_control_gap_center_x(
+            curve_id,
+            float(focus_start_y),
+            float(focus_stop_y),
+            fallback_y_px=float(target_y),
+        )
+        self.viewer.focus_image_interval(
+            y_start_px=float(focus_start_y),
+            y_stop_px=float(focus_stop_y),
+            anchor_y_px=float(target_y),
+            center_x_px=center_x,
+            tight_focus=bool(tight_focus),
+        )
+
+        # Bring the working canvas in front of the modeless QC window so the
+        # navigation command behaves like an actual "go to" operation.
+        self.raise_()
+        self.activateWindow()
+        self.statusBar().showMessage(
+            f"Quality Control: {depth:g} "
+            f"{self._depth_unit_text(calibration.unit)}",
+            5000,
+        )
+
+    def _quality_control_gap_center_x(
+        self,
+        curve_id: str,
+        first_y_px: float,
+        second_y_px: float,
+        *,
+        fallback_y_px: float,
+    ) -> float | None:
+        """Center QC on the real trace endpoints that bound a gap."""
+        xs: list[float] = []
+        for y_px in (first_y_px, second_y_px):
+            x_px = self._quality_control_curve_x_near_y(curve_id, y_px)
+            if x_px is not None:
+                xs.append(x_px)
+
+        if len(xs) >= 2:
+            return (xs[0] + xs[1]) / 2.0
+        if xs:
+            return xs[0]
+        return self._quality_control_curve_x_near_y(
+            curve_id,
+            fallback_y_px,
+        )
+
+    def _quality_control_curve_x_near_y(
+        self,
+        curve_id: str,
+        target_y_px: float,
+    ) -> float | None:
+        """Return the actual curve X at, or vertically nearest to, one image Y."""
+        target_scene = self.viewer.image_to_scene(
+            QPointF(0.0, float(target_y_px))
+        )
+        target_y = float(target_scene.y())
+        eps = 1e-7 * max(1.0, abs(target_y))
+
+        intersections: list[float] = []
+        nearest_x: float | None = None
+        nearest_dy = float("inf")
+
+        for item in self.viewer.saved_digitized_curves.path_items:
+            if str(getattr(item, "curve_id", "")) != str(curve_id):
+                continue
+            getter = getattr(item, "path", None)
+            if not callable(getter):
+                continue
+
+            for polygon in getter().toSubpathPolygons(item.sceneTransform()):
+                points = list(polygon)
+                for point in points:
+                    dy = abs(float(point.y()) - target_y)
+                    if dy < nearest_dy:
+                        nearest_dy = dy
+                        nearest_x = float(point.x())
+
+                for p0, p1 in zip(points, points[1:]):
+                    x0, y0 = float(p0.x()), float(p0.y())
+                    x1, y1 = float(p1.x()), float(p1.y())
+                    if not min(y0, y1) - eps <= target_y <= max(y0, y1) + eps:
+                        continue
+                    if abs(y1 - y0) <= eps:
+                        intersections.append((x0 + x1) / 2.0)
+                    else:
+                        t = (target_y - y0) / (y1 - y0)
+                        t = min(max(t, 0.0), 1.0)
+                        intersections.append(x0 + t * (x1 - x0))
+
+        scene_x = None
+        if intersections:
+            intersections.sort()
+            scene_x = intersections[len(intersections) // 2]
+        elif nearest_x is not None:
+            scene_x = nearest_x
+
+        if scene_x is None:
+            return None
+
+        image_point = self.viewer.scene_to_image(
+            QPointF(float(scene_x), target_y)
+        )
+        return None if image_point is None else float(image_point.x())
+
+
     def export_las(self) -> None:
         """Open the project-level LAS export workflow."""
         if not self.service.has_project or not self.service.can_export_las():
@@ -1496,10 +1732,23 @@ class MainWindow(QMainWindow):
             return
 
         dialog = LasExportDialog(self.service, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        result = dialog.exec()
+
+        # STEP can now be edited without exporting, so refresh project dirty state
+        # regardless of how the modal export dialog was closed.
+        self._refresh_project_state()
+        if self._quality_control_dialog is not None:
+            self._quality_control_dialog.sync_step_from_project()
+
+        if dialog.quality_control_requested:
+            self.open_quality_control(
+                curve_ids=dialog.quality_control_curve_ids
+            )
             return
 
-        self._refresh_project_state()
+        if result != QDialog.DialogCode.Accepted:
+            return
+
         if dialog.exported_path is None or dialog.export_plan is None:
             return
         self.statusBar().showMessage(
@@ -2258,9 +2507,9 @@ class MainWindow(QMainWindow):
         self._update_navigation_hud_from_center()
 
     def _refresh_export_action(self) -> None:
-        self.export_las_action.setEnabled(
-            self.service.has_project and self.service.can_export_las()
-        )
+        available = self.service.has_project and self.service.can_export_las()
+        self.quality_control_action.setEnabled(available)
+        self.export_las_action.setEnabled(available)
 
     def _refresh_image_overlap_guides(self) -> None:
         """Show overlap guides only for the currently active project curve.
@@ -2311,7 +2560,7 @@ class MainWindow(QMainWindow):
                     ),
                     label_above=label_above,
                     tooltip=(
-                        f"{guide.neighbour_segment_name} · Overlap boundary: "
+                        f"{guide.neighbour_segment_name} · Shared overlap reference: "
                         f"{guide.depth:g} {unit}"
                     ),
                 )

@@ -46,10 +46,38 @@ from logdigitizer.utils.paths import safe_project_stem
 
 
 class CompactDoubleSpinBox(QDoubleSpinBox):
-    """Positive floating-point editor without unnecessary trailing zeros."""
+    """Positive floating-point editor with stable decimal-point parsing.
+
+    Qt normally parses QDoubleSpinBox text using the operating-system locale.
+    LogDigitizer deliberately displays STEP with a decimal point, so on locales
+    that use a decimal comma a displayed value such as ``0.25 m`` could be
+    reinterpreted as ``25`` when ``interpretText()`` was called. Keep display
+    and parsing symmetrical and accept either decimal point or decimal comma.
+    """
 
     def textFromValue(self, value: float) -> str:  # noqa: N802 - Qt API
         return f"{value:.12g}"
+
+    def valueFromText(self, text: str) -> float:  # noqa: N802 - Qt API
+        value_text = str(text).strip()
+
+        suffix = self.suffix().strip()
+        if suffix and value_text.endswith(suffix):
+            value_text = value_text[: -len(suffix)].strip()
+
+        prefix = self.prefix().strip()
+        if prefix and value_text.startswith(prefix):
+            value_text = value_text[len(prefix) :].strip()
+
+        # The widget displays a decimal point, but also accept a decimal comma
+        # when the user types it manually.
+        if "," in value_text and "." not in value_text:
+            value_text = value_text.replace(",", ".")
+
+        try:
+            return float(value_text)
+        except ValueError:
+            return float(self.value())
 
 
 class LasFilePreviewDialog(QDialog):
@@ -120,6 +148,8 @@ class LasExportDialog(QDialog):
         self.exported_path: Path | None = None
         self.export_plan: LasExportPlan | None = None
         self.current_preview: LasExportPreview | None = None
+        self.quality_control_requested = False
+        self.quality_control_curve_ids: tuple[str, ...] = ()
         self._curve_infos = service.get_las_export_curve_infos()
         self._initial_metadata = service.get_las_metadata()
 
@@ -167,7 +197,17 @@ class LasExportDialog(QDialog):
         self._populate_curves()
         self._populate_metadata()
         self._set_initial_step()
+        self._initial_step = self.step_spin.value()
         self._refresh_preview()
+
+    def done(self, result: int) -> None:
+        """Remember an edited STEP even when closing without exporting."""
+        # Keyboard tracking is disabled; commit any valid pending text first.
+        self.step_spin.interpretText()
+        step = self.step_spin.value()
+        if step != self._initial_step:
+            self.service.set_last_las_step(step)
+        super().done(result)
 
     @property
     def selected_curve_ids(self) -> tuple[str, ...]:
@@ -331,6 +371,22 @@ class LasExportDialog(QDialog):
             "or unbounded runs remain for review."
         )
         gap_qc_layout.addWidget(self.gap_qc_details)
+
+        qc_action_row = QHBoxLayout()
+        qc_action_row.addStretch(1)
+        self.open_quality_control_button = QPushButton(
+            app_icon("clipboard-check"),
+            "Open Quality Control…",
+        )
+        self.open_quality_control_button.setToolTip(
+            "Open the dedicated Quality Control window using the current "
+            "curve selection and STEP."
+        )
+        self.open_quality_control_button.clicked.connect(
+            self._request_quality_control
+        )
+        qc_action_row.addWidget(self.open_quality_control_button)
+        gap_qc_layout.addLayout(qc_action_row)
         sampling_layout.addWidget(self.gap_qc_frame)
 
         self.preview_error_label = QLabel()
@@ -528,6 +584,7 @@ class LasExportDialog(QDialog):
         self.gap_qc_frame.hide()
         self.gap_qc_details.clear()
         self.preview_error_label.clear()
+        self.open_quality_control_button.setEnabled(False)
         self._clear_summary()
         curve_ids = self.selected_curve_ids
         if not curve_ids:
@@ -569,6 +626,7 @@ class LasExportDialog(QDialog):
             preview.step_below_first_image_resolution
         )
         self._update_gap_qc(preview)
+        self.open_quality_control_button.setEnabled(True)
         self.preview_button.setEnabled(True)
         self.export_button.setEnabled(True)
 
@@ -699,6 +757,17 @@ class LasExportDialog(QDialog):
         if self.service.paths is not None:
             return self.service.paths.root / "export" / f"{stem}.las"
         return Path(f"{stem}.las")
+
+    def _request_quality_control(self) -> None:
+        """Close Export LAS and ask the main window to open detailed QC."""
+        if self.current_preview is None or not self.selected_curve_ids:
+            return
+        self.step_spin.interpretText()
+        step = self.step_spin.value()
+        self.service.set_last_las_step(step)
+        self.quality_control_curve_ids = self.selected_curve_ids
+        self.quality_control_requested = True
+        self.reject()
 
     def _show_file_preview(self) -> None:
         """Build and display the exact LAS text without writing or persisting it."""

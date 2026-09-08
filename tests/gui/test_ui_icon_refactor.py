@@ -34,6 +34,7 @@ def test_main_toolbar_matches_icon_specification(qtbot) -> None:
         "New Project",
         "Open Project",
         "Save Project",
+        "Quality Control",
         "Export LAS…",
         "Zoom In",
         "Zoom Out",
@@ -49,11 +50,21 @@ def test_main_toolbar_matches_icon_specification(qtbot) -> None:
     assert window.new_action.toolTip() == "New Project"
     assert window.open_action.toolTip() == "Open Project"
     assert window.save_action.toolTip() == "Save Project"
+    assert window.quality_control_action.toolTip() == (
+        "Review digitization continuity and LAS sampling gaps"
+    )
     assert window.export_las_action.toolTip() == (
         "Export project curves to LAS 2.0"
     )
     assert window.fit_action.toolTip() == "Fit to Window"
+    assert not window.quality_control_action.isEnabled()
     assert not window.export_las_action.isEnabled()
+
+    quality_button = toolbar.widgetForAction(window.quality_control_action)
+    assert isinstance(quality_button, QToolButton)
+    assert quality_button.toolButtonStyle() is (
+        Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+    )
 
     export_button = toolbar.widgetForAction(window.export_las_action)
     assert isinstance(export_button, QToolButton)
@@ -69,6 +80,19 @@ def test_main_toolbar_matches_icon_specification(qtbot) -> None:
         button = toolbar.widgetForAction(action)
         assert button is not None
         assert button.toolTip() == ""
+
+
+def test_file_menu_contains_quality_control_before_export(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    file_menu = window.menuBar().actions()[0].menu()
+    assert file_menu is not None
+    actions = file_menu.actions()
+    assert window.quality_control_action in actions
+    assert actions.index(window.quality_control_action) < actions.index(
+        window.export_las_action
+    )
 
 
 def test_export_action_tracks_project_export_availability(
@@ -87,6 +111,7 @@ def test_export_action_tracks_project_export_availability(
 
     window._refresh_export_action()
 
+    assert window.quality_control_action.isEnabled()
     assert window.export_las_action.isEnabled()
 
 
@@ -293,7 +318,7 @@ def test_highlight_active_curve_control_is_visible_icon_toggle(qtbot) -> None:
     assert button.toolTip() == "Show all saved curves at full opacity."
 
 
-def test_manual_primary_actions_are_compact_icon_only(qtbot) -> None:
+def test_manual_primary_actions_have_text_and_auxiliary_actions_are_icon_only(qtbot) -> None:
     panel = DigitizationPanel()
     qtbot.addWidget(panel)
 
@@ -309,8 +334,15 @@ def test_manual_primary_actions_are_compact_icon_only(qtbot) -> None:
 
     for button, tooltip in expected.items():
         assert isinstance(button, QToolButton)
-        assert button.toolButtonStyle() is Qt.ToolButtonStyle.ToolButtonIconOnly
-        assert button.size().width() == 32
+        if button in (panel.start_button, panel.edit_button):
+            assert button.toolButtonStyle() is Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+            assert button.minimumWidth() >= 112
+            assert button.text() == (
+                "Start trace" if button is panel.start_button else "Edit trace"
+            )
+        else:
+            assert button.toolButtonStyle() is Qt.ToolButtonStyle.ToolButtonIconOnly
+            assert button.size().width() == 32
         assert button.size().height() == 32
         assert not button.icon().isNull()
         assert button.toolTip() == tooltip
@@ -353,7 +385,10 @@ def test_cut_and_join_active_modes_keep_icon_only_presentation(qtbot) -> None:
     )
     assert panel.cut_section_button.text() == "Cancel Cut"
     assert panel.cut_section_button.toolTip() == "Cancel cut mode."
-    assert panel.cut_section_button.toolButtonStyle() is Qt.ToolButtonStyle.ToolButtonIconOnly
+    assert (
+        panel.cut_section_button.toolButtonStyle()
+        is Qt.ToolButtonStyle.ToolButtonIconOnly
+    )
 
     panel.set_edit_state(
         True,
@@ -363,7 +398,10 @@ def test_cut_and_join_active_modes_keep_icon_only_presentation(qtbot) -> None:
     )
     assert panel.join_section_button.text() == "Cancel Join"
     assert panel.join_section_button.toolTip() == "Cancel join mode."
-    assert panel.join_section_button.toolButtonStyle() is Qt.ToolButtonStyle.ToolButtonIconOnly
+    assert (
+        panel.join_section_button.toolButtonStyle()
+        is Qt.ToolButtonStyle.ToolButtonIconOnly
+    )
 
 
 def test_manual_help_buttons_open_contextual_help(qtbot, monkeypatch) -> None:

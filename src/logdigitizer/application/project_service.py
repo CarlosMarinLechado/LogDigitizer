@@ -604,7 +604,7 @@ class ProjectService:
         segment: Segment | None = None,
         curve_id: str | None = None,
     ) -> tuple[ImageOverlapGuide, ...]:
-        """Return calibrated overlap boundaries for one image.
+        """Return shared midpoint guides within calibrated image overlaps.
 
         When ``curve_id`` is supplied, only images where that project curve is
         marked as present participate in the scientific previous/next sequence.
@@ -613,8 +613,8 @@ class ProjectService:
 
         Images are ordered scientifically by their calibrated depth intervals,
         never by their current Project Explorer position.  A shallower image
-        receives a guide at the start depth of the next relevant image; a deeper
-        image receives a guide at the stop depth of the previous relevant image.
+        and its next relevant image receive a guide at the same midpoint of
+        their overlap, using full raster extents extrapolated from calibration.
         Strict interior checks exclude touching intervals, gaps and boundaries
         that cannot be displayed inside the active image.
 
@@ -679,11 +679,11 @@ class ProjectService:
         if index > 0:
             previous = calibrated[index - 1]
             previous_stop = previous[1]
-            if minimum < previous_stop < maximum:
+            if previous[0] < minimum < previous_stop < maximum:
                 neighbour = previous[3]
                 guides.append(
                     ImageOverlapGuide(
-                        depth=previous_stop,
+                        depth=(minimum + previous_stop) / 2.0,
                         relation=ImageOverlapRelation.PREVIOUS,
                         neighbour_segment_id=neighbour.segment_id,
                         neighbour_segment_name=neighbour.name,
@@ -700,7 +700,7 @@ class ProjectService:
                 neighbour = following[3]
                 guides.append(
                     ImageOverlapGuide(
-                        depth=following_start,
+                        depth=(following_start + maximum) / 2.0,
                         relation=ImageOverlapRelation.NEXT,
                         neighbour_segment_id=neighbour.segment_id,
                         neighbour_segment_name=neighbour.name,
@@ -714,13 +714,10 @@ class ProjectService:
         unit: DepthUnit,
         curve_id: str | None = None,
     ) -> tuple[tuple[float, float], ...]:
-        """Return exact guide-bounded overlap intervals for LAS gap QC.
+        """Return legacy image-overlap intervals for caller compatibility.
 
-        With ``curve_id`` supplied, exclusions are derived from the same
-        curve-specific image sequence used by the visible red guides. Therefore
-        an overlap belonging to GR cannot suppress a DT gap merely because both
-        curve families occupy the same depth range. Omitting ``curve_id`` keeps
-        the historical project-wide behavior for compatibility.
+        LAS QC and interpolation no longer exclude these intervals. The method
+        still returns full image bounds, not the shared midpoint guides.
         """
         if self.project is None:
             return ()
@@ -759,9 +756,11 @@ class ProjectService:
                 if previous_guide is None:
                     continue
 
-                start_depth, stop_depth = sorted(
-                    (float(next_guide.depth), float(previous_guide.depth))
-                )
+                lower_interval = self.get_segment_depth_interval(lower)
+                if lower_interval is None:
+                    continue
+                start_depth = max(upper_interval[0], lower_interval[0])
+                stop_depth = min(upper_interval[1], lower_interval[1])
                 if stop_depth > start_depth:
                     intervals.append((start_depth, stop_depth))
 
@@ -2609,7 +2608,7 @@ class ProjectService:
         self.dirty = True
 
     def get_last_las_step(self) -> float | None:
-        """Return the last successfully exported STEP stored in the project."""
+        """Return the last chosen LAS STEP stored in the project."""
         if self.project is None:
             raise RuntimeError("No project is open.")
         settings = self.project.metadata.get("las_export", {})
@@ -2622,7 +2621,7 @@ class ProjectService:
         return step if isfinite(step) and step > 0.0 else None
 
     def set_last_las_step(self, step_depth: float) -> None:
-        """Persist STEP only after a successful export."""
+        """Persist the chosen LAS STEP in the project."""
         if self.project is None:
             raise RuntimeError("No project is open.")
         try:
@@ -2700,29 +2699,12 @@ class ProjectService:
         assemblies, definitions, resolution = self._las_export_inputs(
             curve_ids,
         )
-        selected_units = {
-            assembly.unit
-            for assembly in assemblies.values()
-            if assembly.unit is not None
-        }
-        excluded_by_curve = (
-            {
-                curve.curve_id: self.get_las_gap_qc_excluded_intervals(
-                    next(iter(selected_units)),
-                    curve.curve_id,
-                )
-                for curve in definitions
-            }
-            if len(selected_units) == 1
-            else {}
-        )
         scale_transitions = self._get_las_scale_transitions(definitions)
         return build_las_export_preview(
             assemblies,
             definitions,
             step_depth,
             first_image_resolution=resolution,
-            gap_qc_excluded_intervals_by_curve=excluded_by_curve,
             scale_transitions=scale_transitions,
         )
 
@@ -2742,22 +2724,6 @@ class ProjectService:
             curve_ids,
         )
 
-        selected_units = {
-            assembly.unit
-            for assembly in assemblies.values()
-            if assembly.unit is not None
-        }
-        excluded_by_curve = (
-            {
-                curve.curve_id: self.get_las_gap_qc_excluded_intervals(
-                    next(iter(selected_units)),
-                    curve.curve_id,
-                )
-                for curve in definitions
-            }
-            if len(selected_units) == 1
-            else {}
-        )
         scale_transitions = self._get_las_scale_transitions(definitions)
         return build_las_export_plan(
             assemblies,
@@ -2765,7 +2731,6 @@ class ProjectService:
             step_depth=step_depth,
             null_value=null_value,
             first_image_resolution=resolution,
-            gap_qc_excluded_intervals_by_curve=excluded_by_curve,
             scale_transitions=scale_transitions,
         )
 

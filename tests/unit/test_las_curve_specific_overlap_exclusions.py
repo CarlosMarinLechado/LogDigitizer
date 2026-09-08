@@ -55,7 +55,7 @@ def _five_sample_gap(curve: CurveDefinition):
     )
 
 
-def test_curve_specific_overlap_exclusion_does_not_leak_to_other_curve() -> None:
+def test_legacy_overlap_exclusion_does_not_inhibit_either_curve() -> None:
     gr = _curve("GR", "API")
     sp = _curve("SP", "MV")
     assemblies = {
@@ -71,10 +71,8 @@ def test_curve_specific_overlap_exclusion_does_not_leak_to_other_curve() -> None
         gap_qc_excluded_intervals_by_curve=exclusions,
     )
 
-    # GR is inside its own overlap zone and therefore stays intentionally NULL.
-    assert not any(gap.curve_id == gr.curve_id for gap in preview.interpolated_gaps)
-    # SP has no overlap exclusion, so the same five-sample internal gap is filled.
-    assert any(gap.curve_id == sp.curve_id for gap in preview.interpolated_gaps)
+    assert preview.internal_gaps == ()
+    assert {gap.curve_id for gap in preview.interpolated_gaps} == {gr.curve_id, sp.curve_id}
 
     plan = prepare_las_export(
         assemblies,
@@ -87,5 +85,5 @@ def test_curve_specific_overlap_exclusion_does_not_leak_to_other_curve() -> None
 
     for depth in (5.0, 6.0, 7.0, 8.0, 9.0):
         index = plan.sampled.depths.index(depth)
-        assert gr_values[index] is None
+        assert gr_values[index] is not None
         assert sp_values[index] is not None

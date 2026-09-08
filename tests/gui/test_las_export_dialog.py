@@ -344,3 +344,85 @@ def test_gap_qc_shows_interpolated_small_gaps_and_warns_only_above_five(
     assert dialog.gap_qc_details.isHidden()
     assert dialog.preview_button.isEnabled()
     assert dialog.export_button.isEnabled()
+
+
+@pytest.mark.parametrize("close_method", ["cancel", "close", "escape"])
+def test_edited_step_survives_closing_without_export(qtbot, close_method):
+    service, _gr, _sp = _service_with_gr_and_empty_sp()
+    dialog = LasExportDialog(service)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.step_spin.setValue(0.2)
+    if close_method == "cancel":
+        qtbot.mouseClick(dialog.cancel_button, Qt.MouseButton.LeftButton)
+    elif close_method == "close":
+        dialog.close()
+    else:
+        qtbot.keyClick(dialog, Qt.Key.Key_Escape)
+
+    assert service.get_last_las_step() == pytest.approx(0.2)
+    assert service.dirty
+    reopened = LasExportDialog(service)
+    qtbot.addWidget(reopened)
+    assert reopened.step_spin.value() == pytest.approx(0.2)
+
+
+def test_closing_unchanged_step_does_not_dirty_project(qtbot):
+    service, _gr, _sp = _service_with_gr_and_empty_sp()
+    dialog = LasExportDialog(service)
+    qtbot.addWidget(dialog)
+    dialog.reject()
+    assert service.get_last_las_step() is None
+    assert not service.dirty
+
+
+def test_pending_step_text_is_committed_on_close(qtbot):
+    service, _gr, _sp = _service_with_gr_and_empty_sp()
+    dialog = LasExportDialog(service)
+    qtbot.addWidget(dialog)
+    dialog.step_spin.lineEdit().setText("0.25")
+    dialog.reject()
+    assert service.get_last_las_step() == pytest.approx(0.25)
+
+
+
+def test_open_quality_control_preserves_current_selection_and_step(qtbot) -> None:
+    service, gr = _service_with_gapped_gr()
+    dialog = LasExportDialog(service)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.step_spin.setValue(0.25)
+
+    qtbot.mouseClick(
+        dialog.open_quality_control_button,
+        Qt.MouseButton.LeftButton,
+    )
+
+    assert dialog.quality_control_requested is True
+    assert dialog.quality_control_curve_ids == (gr.curve_id,)
+    assert service.get_last_las_step() == pytest.approx(0.25)
+    assert dialog.result() == QDialog.DialogCode.Rejected
+
+
+
+def test_step_spinbox_keeps_decimal_point_when_suffix_is_present(qtbot) -> None:
+    service, _gr, _sp = _service_with_gr_and_empty_sp()
+    dialog = LasExportDialog(service)
+    qtbot.addWidget(dialog)
+
+    assert dialog.step_spin.suffix().strip() == "m"
+    dialog.step_spin.setValue(0.25)
+    dialog.step_spin.interpretText()
+
+    assert dialog.step_spin.value() == pytest.approx(0.25)
+
+
+def test_step_spinbox_accepts_decimal_comma_with_suffix(qtbot) -> None:
+    service, _gr, _sp = _service_with_gr_and_empty_sp()
+    dialog = LasExportDialog(service)
+    qtbot.addWidget(dialog)
+
+    dialog.step_spin.lineEdit().setText("0,25")
+    dialog.step_spin.interpretText()
+
+    assert dialog.step_spin.value() == pytest.approx(0.25)

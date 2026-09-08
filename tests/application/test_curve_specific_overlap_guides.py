@@ -49,10 +49,10 @@ def test_overlap_guides_follow_curve_presence_not_all_calibrated_images() -> Non
     second_gr = service.get_image_overlap_guides(second, gr.curve_id)
 
     assert [(guide.relation, guide.depth) for guide in first_gr] == [
-        (ImageOverlapRelation.NEXT, 450.0),
+        (ImageOverlapRelation.NEXT, 475.0),
     ]
     assert [(guide.relation, guide.depth) for guide in second_gr] == [
-        (ImageOverlapRelation.PREVIOUS, 500.0),
+        (ImageOverlapRelation.PREVIOUS, 475.0),
     ]
     assert first_gr[0].neighbour_segment_id == second.segment_id
     assert second_gr[0].neighbour_segment_id == first.segment_id
@@ -64,7 +64,7 @@ def test_overlap_guides_follow_curve_presence_not_all_calibrated_images() -> Non
     assert service.get_image_overlap_guides(third, gr.curve_id) == ()
     assert service.get_image_overlap_guides(first, dt.curve_id) == ()
 
-    # LAS gap-QC exclusions use the same curve-specific guide sequence.
+    # Interpolation protection uses full overlap bounds for that curve sequence.
     assert service.get_las_gap_qc_excluded_intervals(
         DepthUnit.METERS,
         gr.curve_id,
