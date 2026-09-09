@@ -35,6 +35,7 @@ def test_main_toolbar_matches_icon_specification(qtbot) -> None:
         "Open Project",
         "Save Project",
         "Quality Control",
+        "LAS Curve Preview",
         "Export LAS…",
         "Zoom In",
         "Zoom Out",
@@ -53,16 +54,26 @@ def test_main_toolbar_matches_icon_specification(qtbot) -> None:
     assert window.quality_control_action.toolTip() == (
         "Review digitization continuity and LAS sampling gaps"
     )
+    assert window.las_curve_preview_action.toolTip() == (
+        "Preview the final reconstructed curves prepared for LAS export"
+    )
     assert window.export_las_action.toolTip() == (
         "Export project curves to LAS 2.0"
     )
     assert window.fit_action.toolTip() == "Fit to Window"
     assert not window.quality_control_action.isEnabled()
+    assert not window.las_curve_preview_action.isEnabled()
     assert not window.export_las_action.isEnabled()
 
     quality_button = toolbar.widgetForAction(window.quality_control_action)
     assert isinstance(quality_button, QToolButton)
     assert quality_button.toolButtonStyle() is (
+        Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+    )
+
+    preview_button = toolbar.widgetForAction(window.las_curve_preview_action)
+    assert isinstance(preview_button, QToolButton)
+    assert preview_button.toolButtonStyle() is (
         Qt.ToolButtonStyle.ToolButtonTextBesideIcon
     )
 
@@ -82,7 +93,9 @@ def test_main_toolbar_matches_icon_specification(qtbot) -> None:
         assert button.toolTip() == ""
 
 
-def test_file_menu_contains_quality_control_before_export(qtbot) -> None:
+def test_file_menu_contains_quality_control_preview_and_export_in_order(
+    qtbot,
+) -> None:
     window = MainWindow()
     qtbot.addWidget(window)
 
@@ -90,7 +103,12 @@ def test_file_menu_contains_quality_control_before_export(qtbot) -> None:
     assert file_menu is not None
     actions = file_menu.actions()
     assert window.quality_control_action in actions
+    assert window.las_curve_preview_action in actions
+    assert window.export_las_action in actions
     assert actions.index(window.quality_control_action) < actions.index(
+        window.las_curve_preview_action
+    )
+    assert actions.index(window.las_curve_preview_action) < actions.index(
         window.export_las_action
     )
 
@@ -112,6 +130,7 @@ def test_export_action_tracks_project_export_availability(
     window._refresh_export_action()
 
     assert window.quality_control_action.isEnabled()
+    assert window.las_curve_preview_action.isEnabled()
     assert window.export_las_action.isEnabled()
 
 

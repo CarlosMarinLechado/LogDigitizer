@@ -110,6 +110,50 @@ class ImageOverlapGuide:
     neighbour_segment_name: str
 
 
+@dataclass(frozen=True, slots=True)
+class LasCurveTransformTransition:
+    """One saved scale and/or offset change along a digitized project curve."""
+
+    curve_id: str
+    segment_id: str
+    segment_name: str
+    depth: float
+    previous_scale_id: str
+    next_scale_id: str
+    previous_scale_label: str
+    next_scale_label: str
+    previous_scale_offset: int
+    next_scale_offset: int
+
+    @property
+    def scale_changed(self) -> bool:
+        return self.previous_scale_id != self.next_scale_id
+
+    @property
+    def offset_changed(self) -> bool:
+        return self.previous_scale_offset != self.next_scale_offset
+
+    @staticmethod
+    def _offset_text(value: int) -> str:
+        return "0" if int(value) == 0 else f"{int(value):+d}"
+
+    @property
+    def label(self) -> str:
+        parts: list[str] = []
+        if self.scale_changed:
+            parts.append(
+                "Scale: "
+                f"{self.previous_scale_label} → {self.next_scale_label}"
+            )
+        if self.offset_changed:
+            parts.append(
+                "Offset: "
+                f"{self._offset_text(self.previous_scale_offset)} → "
+                f"{self._offset_text(self.next_scale_offset)}"
+            )
+        return " · ".join(parts)
+
+
 class ProjectService:
     """Coordinate use-cases without depending on PySide6 widgets."""
 
@@ -766,6 +810,117 @@ class ProjectService:
 
         intervals.sort()
         return tuple(intervals)
+
+    def get_las_curve_transform_transitions(
+        self,
+        curve_id: str,
+    ) -> tuple[LasCurveTransformTransition, ...]:
+        """Return every saved section seam that changes X scale and/or offset.
+
+        This is presentation/QC metadata only. It does not alter the assembled
+        project curve or the LAS export plan. Unlike the LAS-only interpolation
+        metadata below, these markers are not restricted by pixel-gap size:
+        every real saved scale/offset change is relevant to visual review.
+        """
+        if self.project is None:
+            return ()
+
+        curve = self.get_curve(curve_id)
+        transitions: list[LasCurveTransformTransition] = []
+
+        def scale_label(segment: Segment, scale_id: str) -> str:
+            profile = self.get_horizontal_scale_profile(
+                curve.curve_id,
+                scale_id,
+                segment,
+            )
+            if profile is None:
+                return str(scale_id)
+            full = profile.display_name(curve)
+            prefix = f"{curve.mnemonic}: "
+            return full[len(prefix):] if full.startswith(prefix) else full
+
+        for segment in self.project.segments:
+            digitized = self.get_digitized_curve(curve.curve_id, segment)
+            depth_calibration = self.get_depth_calibration(segment)
+            if digitized is None or depth_calibration is None:
+                continue
+
+            geometric: list[tuple[object, tuple]] = []
+            for section in digitized.sections:
+                if len(section.control_points_px) >= 2:
+                    points = section.control_points_px
+                elif len(section.raw_samples_px) >= 2:
+                    points = section.raw_samples_px
+                else:
+                    continue
+                geometric.append((section, points))
+
+            geometric.sort(
+                key=lambda item: (
+                    item[1][0].y_px,
+                    item[1][-1].y_px,
+                    item[0].section_id,
+                )
+            )
+
+            for (previous, previous_points), (following, following_points) in zip(
+                geometric,
+                geometric[1:],
+            ):
+                if (
+                    previous.scale_id == following.scale_id
+                    and previous.scale_offset == following.scale_offset
+                ):
+                    continue
+
+                try:
+                    previous_depth = pixel_y_to_depth(
+                        previous_points[-1].y_px,
+                        depth_calibration,
+                    )
+                    following_depth = pixel_y_to_depth(
+                        following_points[0].y_px,
+                        depth_calibration,
+                    )
+                except (CalibrationError, CalibrationRangeError, ValueError):
+                    continue
+
+                transitions.append(
+                    LasCurveTransformTransition(
+                        curve_id=curve.curve_id,
+                        segment_id=segment.segment_id,
+                        segment_name=segment.name,
+                        depth=(
+                            float(previous_depth) + float(following_depth)
+                        )
+                        / 2.0,
+                        previous_scale_id=previous.scale_id,
+                        next_scale_id=following.scale_id,
+                        previous_scale_label=scale_label(
+                            segment,
+                            previous.scale_id,
+                        ),
+                        next_scale_label=scale_label(
+                            segment,
+                            following.scale_id,
+                        ),
+                        previous_scale_offset=int(previous.scale_offset),
+                        next_scale_offset=int(following.scale_offset),
+                    )
+                )
+
+        transitions.sort(
+            key=lambda item: (
+                item.depth,
+                item.segment_id,
+                item.previous_scale_id,
+                item.next_scale_id,
+                item.previous_scale_offset,
+                item.next_scale_offset,
+            )
+        )
+        return tuple(transitions)
 
     def _get_las_scale_transitions(
         self,

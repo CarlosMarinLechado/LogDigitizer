@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QLocale, Qt
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
@@ -54,6 +54,22 @@ class CompactDoubleSpinBox(QDoubleSpinBox):
     reinterpreted as ``25`` when ``interpretText()`` was called. Keep display
     and parsing symmetrical and accept either decimal point or decimal comma.
     """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        # Use a stable dot-decimal locale internally. The custom validator and
+        # valueFromText() still accept a comma when entered manually.
+        self.setLocale(QLocale.c())
+
+    def validate(self, text: str, pos: int):  # noqa: N802 - Qt API
+        # QDoubleSpinBox validates before valueFromText() is called. Normalize
+        # a decimal comma for validation so both "0.25" and "0,25" are accepted.
+        normalized = str(text).replace(",", ".")
+        state, _normalized_text, _normalized_pos = super().validate(
+            normalized,
+            pos,
+        )
+        return state, text, pos
 
     def textFromValue(self, value: float) -> str:  # noqa: N802 - Qt API
         return f"{value:.12g}"
@@ -350,30 +366,19 @@ class LasExportDialog(QDialog):
 
         self.gap_qc_frame = QFrame()
         self.gap_qc_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        gap_qc_layout = QVBoxLayout(self.gap_qc_frame)
-        gap_qc_layout.setContentsMargins(10, 8, 10, 8)
-        gap_qc_layout.setSpacing(6)
+        gap_qc_layout = QHBoxLayout(self.gap_qc_frame)
+        gap_qc_layout.setContentsMargins(10, 7, 10, 7)
+        gap_qc_layout.setSpacing(10)
 
         self.gap_qc_status_label = QLabel()
         self.gap_qc_status_label.setWordWrap(True)
         self.gap_qc_status_label.setStyleSheet("font-weight: 600;")
-        gap_qc_layout.addWidget(self.gap_qc_status_label)
-
-        self.gap_qc_details = QPlainTextEdit()
-        self.gap_qc_details.setReadOnly(True)
-        self.gap_qc_details.setMaximumHeight(105)
-        self.gap_qc_details.setLineWrapMode(
-            QPlainTextEdit.LineWrapMode.WidgetWidth
+        self.gap_qc_status_label.setToolTip(
+            "Compact STEP-aware quality-control summary. "
+            "Open Quality Control for gap locations and navigation."
         )
-        self.gap_qc_details.setToolTip(
-            "STEP-aware LAS gap QC. Internal runs of up to 5 missing samples "
-            "bounded by valid values are automatically interpolated; longer "
-            "or unbounded runs remain for review."
-        )
-        gap_qc_layout.addWidget(self.gap_qc_details)
+        gap_qc_layout.addWidget(self.gap_qc_status_label, 1)
 
-        qc_action_row = QHBoxLayout()
-        qc_action_row.addStretch(1)
         self.open_quality_control_button = QPushButton(
             app_icon("clipboard-check"),
             "Open Quality Control…",
@@ -385,8 +390,7 @@ class LasExportDialog(QDialog):
         self.open_quality_control_button.clicked.connect(
             self._request_quality_control
         )
-        qc_action_row.addWidget(self.open_quality_control_button)
-        gap_qc_layout.addLayout(qc_action_row)
+        gap_qc_layout.addWidget(self.open_quality_control_button)
         sampling_layout.addWidget(self.gap_qc_frame)
 
         self.preview_error_label = QLabel()
@@ -582,7 +586,6 @@ class LasExportDialog(QDialog):
         self.current_preview = None
         self.warning_frame.hide()
         self.gap_qc_frame.hide()
-        self.gap_qc_details.clear()
         self.preview_error_label.clear()
         self.open_quality_control_button.setEnabled(False)
         self._clear_summary()
@@ -631,107 +634,41 @@ class LasExportDialog(QDialog):
         self.export_button.setEnabled(True)
 
     def _update_gap_qc(self, preview: LasExportPreview) -> None:
-        """Show STEP-aware gap QC and LAS-only small-gap interpolation."""
-        unit = self._unit_text(preview.depth_unit)
+        """Show a compact STEP-aware quality-control summary for export."""
         self.gap_qc_frame.show()
 
-        remaining_count = len(preview.internal_gaps)
-        remaining_samples = preview.missing_internal_sample_count
+        review_count = len(preview.internal_gaps)
         interpolated_count = len(preview.interpolated_gaps)
-        interpolated_samples = preview.interpolated_sample_count
 
-        if not preview.internal_gaps:
+        if review_count:
             self.gap_qc_frame.setStyleSheet(
-                "QFrame { background: #ECFDF3; border: 1px solid #86D49C; "
-                "border-radius: 4px; } QLabel { border: none; color: #166534; }"
+                "QFrame { background: #FFF7E6; border: 1px solid #E6B65C; "
+                "border-radius: 4px; } QLabel { border: none; color: #7A4E00; }"
             )
-            if preview.interpolated_gaps:
-                self.gap_qc_status_label.setText(
-                    "✓ No gaps requiring review. "
-                    f"{interpolated_count} small gap(s), "
-                    f"{interpolated_samples} LAS sample(s) automatically "
-                    "interpolated."
+            status = (
+                f"⚠ Quality Control: {review_count} gap(s) require review"
+            )
+            if interpolated_count:
+                status += (
+                    f" · {interpolated_count} small gap(s) automatically "
+                    "interpolated"
                 )
-                lines = [
-                    "Automatically interpolated (LAS only):",
-                    *(
-                        "✓ " + self._gap_qc_text(
-                            gap,
-                            unit,
-                            interpolated=True,
-                        )
-                        for gap in preview.interpolated_gaps
-                    ),
-                ]
-                self.gap_qc_details.setPlainText("\n".join(lines))
-                self.gap_qc_details.show()
-            else:
-                self.gap_qc_status_label.setText(
-                    "✓ No internal gaps detected for the current STEP."
-                )
-                self.gap_qc_details.clear()
-                self.gap_qc_details.hide()
+            self.gap_qc_status_label.setText(status)
             return
 
         self.gap_qc_frame.setStyleSheet(
-            "QFrame { background: #FFF7E6; border: 1px solid #E6B65C; "
-            "border-radius: 4px; } QLabel { border: none; color: #7A4E00; }"
+            "QFrame { background: #ECFDF3; border: 1px solid #86D49C; "
+            "border-radius: 4px; } QLabel { border: none; color: #166534; }"
         )
-        status = (
-            "⚠ Gaps requiring review for the current STEP. "
-            f"{remaining_count} gap(s), {remaining_samples} missing LAS sample(s)."
-        )
-        if preview.interpolated_gaps:
-            status += (
-                f" {interpolated_count} small gap(s), "
-                f"{interpolated_samples} LAS sample(s) automatically interpolated."
-            )
-        status += " Export is still permitted."
-        self.gap_qc_status_label.setText(status)
-
-        lines: list[str] = []
-        if preview.interpolated_gaps:
-            lines.append("Automatically interpolated (LAS only):")
-            lines.extend(
-                "✓ " + self._gap_qc_text(gap, unit, interpolated=True)
-                for gap in preview.interpolated_gaps
-            )
-            lines.append("")
-        lines.append("Require review:")
-        lines.extend(
-            "⚠ " + self._gap_qc_text(gap, unit, interpolated=False)
-            for gap in preview.internal_gaps
-        )
-        self.gap_qc_details.setPlainText("\n".join(lines))
-        self.gap_qc_details.show()
-
-    @staticmethod
-    def _gap_qc_text(gap, unit: str, *, interpolated: bool = False) -> str:
-        if interpolated:
-            samples = (
-                "1 LAS sample interpolated"
-                if gap.missing_sample_count == 1
-                else f"{gap.missing_sample_count} LAS samples interpolated"
+        if interpolated_count:
+            self.gap_qc_status_label.setText(
+                "✓ Quality Control: No gaps require review"
+                f" · {interpolated_count} small gap(s) automatically interpolated"
             )
         else:
-            samples = (
-                "1 missing LAS sample"
-                if gap.missing_sample_count == 1
-                else f"{gap.missing_sample_count} missing LAS samples"
+            self.gap_qc_status_label.setText(
+                "✓ Quality Control: No gaps requiring review"
             )
-        missing_range = (
-            f"{gap.missing_start_depth:g} {unit}"
-            if gap.missing_start_depth == gap.missing_stop_depth
-            else (
-                f"{gap.missing_start_depth:g}–"
-                f"{gap.missing_stop_depth:g} {unit}"
-            )
-        )
-        action = "interpolated between" if interpolated else "gap between"
-        return (
-            f"{gap.mnemonic}: {action} {gap.previous_depth:g} and "
-            f"{gap.next_depth:g} {unit} · {samples} ({missing_range})"
-        )
 
     def _clear_summary(self) -> None:
         for label in (

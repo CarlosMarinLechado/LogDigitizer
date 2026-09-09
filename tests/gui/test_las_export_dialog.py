@@ -302,9 +302,7 @@ def _service_with_gapped_gr() -> tuple[ProjectService, CurveDefinition]:
     return service, gr
 
 
-def test_gap_qc_shows_interpolated_small_gaps_and_warns_only_above_five(
-    qtbot,
-) -> None:
+def test_gap_qc_summary_is_compact_and_step_aware(qtbot) -> None:
     service, gr = _service_with_gapped_gr()
     dialog = LasExportDialog(service)
     qtbot.addWidget(dialog)
@@ -316,13 +314,11 @@ def test_gap_qc_shows_interpolated_small_gaps_and_warns_only_above_five(
     assert dialog.current_preview.internal_gaps == ()
     assert len(dialog.current_preview.interpolated_gaps) == 1
     assert not dialog.gap_qc_frame.isHidden()
-    assert not dialog.gap_qc_details.isHidden()
-    assert "No gaps requiring review" in dialog.gap_qc_status_label.text()
-    assert "automatically interpolated" in dialog.gap_qc_status_label.text()
-    assert "GR: interpolated between 4 and 6 m" in (
-        dialog.gap_qc_details.toPlainText()
+    assert "No gaps require review" in dialog.gap_qc_status_label.text()
+    assert "1 small gap(s) automatically interpolated" in (
+        dialog.gap_qc_status_label.text()
     )
-    assert "1 LAS sample interpolated" in dialog.gap_qc_details.toPlainText()
+    assert "missing LAS sample" not in dialog.gap_qc_status_label.text()
 
     # STEP=0.25 places seven missing samples, which exceeds the five-sample rule.
     dialog.step_spin.setValue(0.25)
@@ -330,9 +326,8 @@ def test_gap_qc_shows_interpolated_small_gaps_and_warns_only_above_five(
     assert dialog.current_preview is not None
     assert len(dialog.current_preview.internal_gaps) == 1
     assert dialog.current_preview.interpolated_gaps == ()
-    assert "Gaps requiring review" in dialog.gap_qc_status_label.text()
-    assert "7 missing LAS sample" in dialog.gap_qc_status_label.text()
-    assert "GR: gap between 4 and 6 m" in dialog.gap_qc_details.toPlainText()
+    assert "1 gap(s) require review" in dialog.gap_qc_status_label.text()
+    assert "missing LAS sample" not in dialog.gap_qc_status_label.text()
 
     # STEP=2 lands directly on 4 and 6, so there is no missing LAS sample.
     dialog.step_spin.setValue(2.0)
@@ -340,10 +335,10 @@ def test_gap_qc_shows_interpolated_small_gaps_and_warns_only_above_five(
     assert dialog.current_preview is not None
     assert dialog.current_preview.internal_gaps == ()
     assert dialog.current_preview.interpolated_gaps == ()
-    assert "No internal gaps detected" in dialog.gap_qc_status_label.text()
-    assert dialog.gap_qc_details.isHidden()
+    assert "No gaps requiring review" in dialog.gap_qc_status_label.text()
     assert dialog.preview_button.isEnabled()
     assert dialog.export_button.isEnabled()
+    assert dialog.open_quality_control_button.isEnabled()
 
 
 @pytest.mark.parametrize("close_method", ["cancel", "close", "escape"])

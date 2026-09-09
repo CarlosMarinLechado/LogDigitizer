@@ -1,8 +1,8 @@
-; Inno Setup script for Log Digitizer 1.0.0
+; Inno Setup script for Log Digitizer 1.1.0
 ; Compile this file only after rebuilding dist\LogDigitizer with PyInstaller.
 
 #define MyAppName "Log Digitizer"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "IGME-CSIC"
 #define MyAppExeName "LogDigitizer.exe"
 #define MyAppGuideName "LogDigitizer_User_Guide.pdf"
@@ -33,7 +33,7 @@ CloseApplications=yes
 RestartApplications=no
 UsePreviousAppDir=yes
 UsePreviousLanguage=yes
-VersionInfoVersion=0.1.0.0
+VersionInfoVersion=1.1.0.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} installer
 VersionInfoProductName={#MyAppName}

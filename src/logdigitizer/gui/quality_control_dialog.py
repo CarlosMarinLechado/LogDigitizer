@@ -108,7 +108,8 @@ class QualityControlDialog(QDialog):
         intro.setStyleSheet("color: #6B7280;")
 
         sampling_group = QGroupBox("Sampling")
-        sampling_row = QHBoxLayout(sampling_group)
+        sampling_layout = QVBoxLayout(sampling_group)
+        sampling_row = QHBoxLayout()
         sampling_row.addWidget(QLabel("STEP"))
         self.step_spin = CompactDoubleSpinBox()
         self.step_spin.setDecimals(12)
@@ -116,6 +117,16 @@ class QualityControlDialog(QDialog):
         self.step_spin.setKeyboardTracking(False)
         self.step_spin.setAccelerated(True)
         sampling_row.addWidget(self.step_spin)
+
+        sampling_row.addSpacing(20)
+        sampling_row.addWidget(QLabel("Pixel resolution"))
+        self.resolution_value = QLabel("—")
+        self.resolution_value.setStyleSheet("font-weight: 600;")
+        self.resolution_value.setToolTip(
+            "Approximate vertical depth represented by one image pixel."
+        )
+        sampling_row.addWidget(self.resolution_value)
+
         sampling_row.addStretch(1)
         self.refresh_button = QPushButton(
             app_icon("rotate"),
@@ -125,6 +136,15 @@ class QualityControlDialog(QDialog):
             "Repeat quality-control analysis after editing digitized traces."
         )
         sampling_row.addWidget(self.refresh_button)
+        sampling_layout.addLayout(sampling_row)
+
+        self.resolution_warning_label = QLabel(
+            "⚠ STEP is smaller than the approximate pixel resolution."
+        )
+        self.resolution_warning_label.setWordWrap(True)
+        self.resolution_warning_label.setStyleSheet("color: #7A4E00;")
+        self.resolution_warning_label.hide()
+        sampling_layout.addWidget(self.resolution_warning_label)
 
         self.status_frame = QFrame()
         self.status_frame.setFrameShape(QFrame.Shape.StyledPanel)
@@ -279,6 +299,8 @@ class QualityControlDialog(QDialog):
         self._reload_curve_infos()
         self.current_preview = None
         self.error_label.clear()
+        self.resolution_value.setText("—")
+        self.resolution_warning_label.hide()
         self._issues.clear()
         self.summary_table.setRowCount(0)
         self.issue_table.setRowCount(0)
@@ -308,6 +330,18 @@ class QualityControlDialog(QDialog):
         self.current_preview = preview
         unit = self._unit_text(preview.depth_unit)
         self.step_spin.setSuffix(f" {unit}")
+
+        if preview.first_image_resolution is None:
+            self.resolution_value.setText("—")
+            self.resolution_warning_label.hide()
+        else:
+            self.resolution_value.setText(
+                f"≈ {preview.first_image_resolution:g} {unit}/pixel"
+            )
+            self.resolution_warning_label.setVisible(
+                preview.step_below_first_image_resolution
+            )
+
         self._issues = [
             *((self.STATUS_REVIEW, gap) for gap in preview.internal_gaps),
             *(

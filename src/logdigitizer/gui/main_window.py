@@ -62,6 +62,7 @@ from logdigitizer.gui.automatic_digitization_panel import (
 )
 from logdigitizer.gui.icons import app_icon
 from logdigitizer.gui.las_export_dialog import LasExportDialog
+from logdigitizer.gui.las_curve_preview import LasCurvePreviewDialog
 from logdigitizer.gui.manual_digitization_controller import (
     ManualDigitizationController,
 )
@@ -231,7 +232,7 @@ class MainWindow(QMainWindow):
         )
         self.settings = settings or QSettings(
             "IGME-CSIC",
-            "Digitalización de Logs",
+            "LogDigitizer",
         )
         self.recent_projects = RecentProjectsStore(self.settings)
         self.viewer = ImageViewer()
@@ -241,6 +242,7 @@ class MainWindow(QMainWindow):
         self.calibration_panel = CalibrationPanel()
         self.digitization_panel = AutomaticDigitizationPanel()
         self._quality_control_dialog: QualityControlDialog | None = None
+        self._las_curve_preview_dialog: LasCurvePreviewDialog | None = None
         self._active_depth_calibration: DepthCalibration | None = None
         # Tracks which right-hand workspace most recently defined the HUD's
         # working scale context. Scientific project data are never changed.
@@ -253,7 +255,7 @@ class MainWindow(QMainWindow):
         self.central_stack.addWidget(self.viewer)
         self.setCentralWidget(self.central_stack)
         self.setWindowTitle(
-            "Digitalización de Logs"
+            "LogDigitizer"
         )
         self.resize(1350, 850)
 
@@ -465,6 +467,10 @@ class MainWindow(QMainWindow):
             "Quality Control",
             self,
         )
+        self.las_curve_preview_action = QAction(
+            "LAS Curve Preview",
+            self,
+        )
         self.export_las_action = QAction(
             "Export LAS…",
             self,
@@ -528,6 +534,7 @@ class MainWindow(QMainWindow):
         self.save_action.setIcon(app_icon("floppy-disk"))
         self.add_action.setIcon(app_icon("image"))
         self.quality_control_action.setIcon(app_icon("clipboard-check"))
+        self.las_curve_preview_action.setIcon(app_icon("chart-line"))
         self.export_las_action.setIcon(app_icon("file-export"))
         self.zoom_in_action.setIcon(app_icon("magnifying-glass-plus"))
         self.zoom_out_action.setIcon(app_icon("magnifying-glass-minus"))
@@ -540,6 +547,9 @@ class MainWindow(QMainWindow):
         self.save_action.setToolTip("Save Project")
         self.quality_control_action.setToolTip(
             "Review digitization continuity and LAS sampling gaps"
+        )
+        self.las_curve_preview_action.setToolTip(
+            "Preview the final reconstructed curves prepared for LAS export"
         )
         self.export_las_action.setToolTip("Export project curves to LAS 2.0")
         self.fit_action.setToolTip("Fit to Window")
@@ -558,6 +568,9 @@ class MainWindow(QMainWindow):
         )
         self.quality_control_action.triggered.connect(
             lambda: self.open_quality_control()
+        )
+        self.las_curve_preview_action.triggered.connect(
+            self.open_las_curve_preview
         )
         self.export_las_action.triggered.connect(
             self.export_las
@@ -610,6 +623,9 @@ class MainWindow(QMainWindow):
         )
         file_menu.addAction(
             self.quality_control_action
+        )
+        file_menu.addAction(
+            self.las_curve_preview_action
         )
         file_menu.addAction(
             self.export_las_action
@@ -665,19 +681,22 @@ class MainWindow(QMainWindow):
 
         # Add Image remains available from File / the project panel, and 1:1
         # remains available from View / shortcut "1"; both are intentionally
-        # omitted from the compact main toolbar. Quality Control and Export LAS
-        # keep visible labels because they are project-level workflow actions.
+        # omitted from the compact main toolbar. Quality Control, LAS Curve
+        # Preview and Export LAS keep visible labels because they are
+        # project-level workflow actions.
         for action in (
             self.new_action,
             self.open_action,
             self.save_action,
             self.quality_control_action,
+            self.las_curve_preview_action,
             self.export_las_action,
         ):
             toolbar.addAction(action)
 
         for labelled_action in (
             self.quality_control_action,
+            self.las_curve_preview_action,
             self.export_las_action,
         ):
             labelled_button = toolbar.widgetForAction(labelled_action)
@@ -1539,7 +1558,7 @@ class MainWindow(QMainWindow):
             self._navigate_to_quality_control_issue
         )
         dialog.stepChanged.connect(
-            lambda _step: self._refresh_project_state()
+            self._quality_control_step_changed
         )
         dialog.destroyed.connect(
             self._quality_control_dialog_destroyed
@@ -1548,6 +1567,141 @@ class MainWindow(QMainWindow):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _quality_control_step_changed(self, _step: float) -> None:
+        """Synchronize project state and the visual LAS preview after QC STEP edits."""
+        self._refresh_project_state()
+        if self._las_curve_preview_dialog is not None:
+            self._las_curve_preview_dialog.sync_step_from_project()
+
+    def open_las_curve_preview(self) -> None:
+        """Open or focus the modeless final LAS curve reconstruction preview."""
+        if not self.service.has_project or not self.service.can_export_las():
+            QMessageBox.information(
+                self,
+                "LAS Curve Preview",
+                "No digitized curves are ready for LAS curve preview.",
+            )
+            return
+
+        dialog = self._las_curve_preview_dialog
+        if dialog is not None:
+            dialog.sync_step_from_project()
+            dialog.refresh_from_project()
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+
+        dialog = LasCurvePreviewDialog(
+            self.service,
+            self,
+        )
+        dialog.navigationRequested.connect(
+            self._navigate_from_las_curve_preview
+        )
+        dialog.stepChanged.connect(
+            self._las_curve_preview_step_changed
+        )
+        dialog.destroyed.connect(
+            self._las_curve_preview_dialog_destroyed
+        )
+        self._las_curve_preview_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _las_curve_preview_step_changed(self, _step: float) -> None:
+        """Synchronize STEP-dependent windows after LAS preview edits."""
+        self._refresh_project_state()
+        if self._quality_control_dialog is not None:
+            self._quality_control_dialog.sync_step_from_project()
+
+    def _navigate_from_las_curve_preview(
+        self,
+        curve_id: str,
+        segment_id: str,
+        depth: float,
+    ) -> None:
+        """Navigate to a preview marker without changing the selected curve.
+
+        The source segment may change because the requested depth belongs to a
+        different scanned image. The active curve/tool context is deliberately
+        left untouched: automatic traces and other non-selectable curve states
+        must remain valid.
+        """
+        if self.service.project is None:
+            return
+
+        if self.service.active_segment_id != segment_id:
+            self.select_segment(segment_id)
+            if self.service.active_segment_id != segment_id:
+                return
+
+        segment = self.service.active_segment
+        if segment is None or not self.viewer.has_image:
+            return
+
+        calibration = self.service.get_depth_calibration(segment)
+        if calibration is None:
+            return
+
+        target_depth = min(
+            max(
+                float(depth),
+                float(calibration.minimum_depth),
+            ),
+            float(calibration.maximum_depth),
+        )
+        try:
+            target_y = float(
+                depth_to_pixel_y(target_depth, calibration)
+            )
+        except (CalibrationError, CalibrationRangeError):
+            return
+
+        _width, image_height = self.viewer.image_size
+        if image_height <= 0:
+            return
+
+        # Use a deliberately tight local window around the marker so nearby
+        # scale/offset transitions can be distinguished clearly. The interval
+        # remains proportional to image height, but is capped to avoid an
+        # overly distant view on long scanned logs.
+        half_window_px = min(
+            55.0,
+            max(22.0, float(image_height) * 0.02),
+        )
+        focus_start_y = max(0.0, target_y - half_window_px)
+        focus_stop_y = min(
+            float(image_height - 1),
+            target_y + half_window_px,
+        )
+
+        center_x = self._quality_control_curve_x_near_y(
+            curve_id,
+            target_y,
+        )
+        self.viewer.focus_image_interval(
+            y_start_px=focus_start_y,
+            y_stop_px=focus_stop_y,
+            anchor_y_px=target_y,
+            center_x_px=center_x,
+            tight_focus=True,
+        )
+
+        # Do not refresh controllers with curve_id and do not focus a curve in
+        # Project Explorer. This operation is navigation only.
+        self.raise_()
+        self.activateWindow()
+        self.statusBar().showMessage(
+            f"LAS Curve Preview: {target_depth:g} "
+            f"{self._depth_unit_text(calibration.unit)}",
+            5000,
+        )
+
+    def _las_curve_preview_dialog_destroyed(self, *_args) -> None:
+        self._las_curve_preview_dialog = None
 
     def _quality_control_dialog_destroyed(self, *_args) -> None:
         self._quality_control_dialog = None
@@ -1739,6 +1893,8 @@ class MainWindow(QMainWindow):
         self._refresh_project_state()
         if self._quality_control_dialog is not None:
             self._quality_control_dialog.sync_step_from_project()
+        if self._las_curve_preview_dialog is not None:
+            self._las_curve_preview_dialog.sync_step_from_project()
 
         if dialog.quality_control_requested:
             self.open_quality_control(
@@ -2509,6 +2665,7 @@ class MainWindow(QMainWindow):
     def _refresh_export_action(self) -> None:
         available = self.service.has_project and self.service.can_export_las()
         self.quality_control_action.setEnabled(available)
+        self.las_curve_preview_action.setEnabled(available)
         self.export_las_action.setEnabled(available)
 
     def _refresh_image_overlap_guides(self) -> None:
@@ -2610,11 +2767,11 @@ class MainWindow(QMainWindow):
             )
             self.setWindowTitle(
                 f"{self.service.project.name} "
-                f"— Digitalización de Logs{dirty}"
+                f"— LogDigitizer{dirty}"
             )
         else:
             self.setWindowTitle(
-                "Digitalización de Logs"
+                "LogDigitizer"
             )
 
     def _update_coordinates(
@@ -3049,9 +3206,9 @@ class MainWindow(QMainWindow):
     def show_about(self) -> None:
         QMessageBox.about(
             self,
-            "About Digitalización de Logs",
+            "About LogDigitizer",
             (
-                "<b>Digitalización de Logs</b><br>"
+                "<b>LogDigitizer</b><br>"
                 f"Development version {__version__}<br><br>"
                 "Scientific desktop software for digitizing "
                 "scanned historical logs.<br>"

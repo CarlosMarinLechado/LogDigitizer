@@ -73,7 +73,7 @@ def _create_splash(app: QApplication) -> QSplashScreen | None:
 def main() -> int:
     """Start the desktop application and return the Qt exit code."""
     app = QApplication(sys.argv)
-    app.setApplicationName("Digitalización de Logs")
+    app.setApplicationName("LogDigitizer")
     app.setOrganizationName("IGME-CSIC")
 
     icon_path = application_icon_path()
