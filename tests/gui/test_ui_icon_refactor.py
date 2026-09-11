@@ -305,9 +305,11 @@ def test_curve_selector_and_saved_curve_defaults_match_new_spec(qtbot) -> None:
     assert panel.show_saved_check.isHidden()
     assert panel.dim_inactive_check.isHidden()
     assert panel.show_saved_curves is True
-    assert panel.dim_inactive_curves is True
+    assert panel.dim_inactive_curves is False
     assert panel.show_saved_check.isChecked()
-    assert panel.dim_inactive_check.isChecked()
+    assert not panel.dim_inactive_check.isChecked()
+    assert not panel.show_saved_check.isEnabled()
+    assert not panel.dim_inactive_check.isEnabled()
 
     # Removed permanent information remains compatibility-only and hidden.
     assert panel.section_count_label.isHidden()
@@ -317,24 +319,14 @@ def test_curve_selector_and_saved_curve_defaults_match_new_spec(qtbot) -> None:
     assert panel.selected_node_label.isHidden()
 
 
-def test_highlight_active_curve_control_is_visible_icon_toggle(qtbot) -> None:
+def test_highlight_active_curve_control_has_been_removed(qtbot) -> None:
     panel = DigitizationPanel()
     qtbot.addWidget(panel)
 
-    button = panel.highlight_active_curve_button
-    assert isinstance(button, QToolButton)
-    assert button.toolButtonStyle() is Qt.ToolButtonStyle.ToolButtonIconOnly
-    assert button.size().width() == 32
-    assert button.size().height() == 32
-    assert button.isCheckable()
-    assert button.isChecked()
-    assert not button.icon().isNull()
-    assert "Highlight active curve" in button.toolTip()
-
-    qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
-    assert not button.isChecked()
+    assert not hasattr(panel, "highlight_active_curve_button")
+    assert panel.show_saved_curves is True
     assert panel.dim_inactive_curves is False
-    assert button.toolTip() == "Show all saved curves at full opacity."
+
 
 
 def test_manual_primary_actions_have_text_and_auxiliary_actions_are_icon_only(qtbot) -> None:

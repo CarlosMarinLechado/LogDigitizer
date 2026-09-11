@@ -6,6 +6,8 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 pytest.importorskip("qtawesome")
 
+from PySide6.QtCore import Qt
+
 from logdigitizer.application.project_service import ProjectService
 from logdigitizer.domain.calibration import CurveDefinition
 from logdigitizer.domain.digitization import (
@@ -148,6 +150,16 @@ def test_preview_uses_final_las_plan_and_can_select_curves(qtbot) -> None:
         sp.curve_id,
     )
     assert dialog.curve_combo.count() == 2
+    assert dialog.curve_combo.itemText(0) == "GR"
+    assert dialog.curve_combo.itemText(1) == "SP"
+    assert "Gamma Ray" in str(
+        dialog.curve_combo.itemData(
+            0,
+            Qt.ItemDataRole.ToolTipRole,
+        )
+    )
+    assert dialog.controls_layout.rowCount() == 2
+    assert dialog.minimumWidth() == 640
     assert dialog.samples_value.text() == "11"
     assert dialog.step_value.text() == "1 m"
 

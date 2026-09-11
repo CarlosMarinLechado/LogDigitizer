@@ -129,9 +129,8 @@ class DigitizationPanel(QWidget):
     scaleSelectionChanged = Signal(str)
     scaleOffsetChanged = Signal(int)
 
-    # Kept for backward compatibility with controller wiring. The corresponding
-    # controls are no longer part of the visible interface and their effective
-    # behavior is permanently enabled.
+    # Kept for backward compatibility with older controller/plugin wiring.
+    # The UI no longer exposes saved-curve visibility/opacity controls.
     showSavedCurvesChanged = Signal(bool)
     dimInactiveCurvesChanged = Signal(bool)
 
@@ -170,21 +169,12 @@ class DigitizationPanel(QWidget):
             "Display color assigned to the selected project curve."
         )
 
-        self.highlight_active_curve_button = _icon_button(
-            "eye",
-            "Highlight active curve",
-            tooltip="Highlight active curve",
-        )
-        self.highlight_active_curve_button.setCheckable(True)
-        self.highlight_active_curve_button.setChecked(True)
-
         curve_row = QHBoxLayout()
         curve_row.setContentsMargins(0, 0, 0, 0)
         curve_row.addWidget(QLabel("Curve:"))
         curve_row.addWidget(self.curve_mnemonic_label)
         curve_row.addWidget(self.curve_combo, 1)
         curve_row.addWidget(self.curve_color_preview)
-        curve_row.addWidget(self.highlight_active_curve_button)
 
         self.scale_profile_combo = QComboBox()
         self.scale_profile_combo.setMinimumWidth(150)
@@ -234,14 +224,17 @@ class DigitizationPanel(QWidget):
         curve_group_layout.addLayout(scale_row)
         curve_group_layout.addWidget(self.readiness_label)
 
-        # Compatibility-only controls. They deliberately remain hidden and the
-        # public properties below always return True, as required by the new UI.
+        # Compatibility-only controls retained for older controller/plugin
+        # wiring. They are hidden and intentionally have no effect: saved
+        # curves are always visible and always rendered at full opacity.
         self.show_saved_check = QCheckBox("Show saved curves", self)
         self.show_saved_check.setChecked(True)
+        self.show_saved_check.setEnabled(False)
         self.show_saved_check.hide()
 
         self.dim_inactive_check = QCheckBox("Dim non-active curves", self)
-        self.dim_inactive_check.setChecked(True)
+        self.dim_inactive_check.setChecked(False)
+        self.dim_inactive_check.setEnabled(False)
         self.dim_inactive_check.hide()
 
         # Compatibility-only status widgets. Controllers/tests may still inspect
@@ -405,12 +398,6 @@ class DigitizationPanel(QWidget):
         self.done_edit_button.clicked.connect(self.editDoneRequested.emit)
         self.start_help_button.clicked.connect(self._show_start_manual_help)
         self.edit_help_button.clicked.connect(self._show_edit_manual_help)
-        self.show_saved_check.toggled.connect(self.showSavedCurvesChanged.emit)
-        self.dim_inactive_check.toggled.connect(self._dim_inactive_check_toggled)
-        self.highlight_active_curve_button.toggled.connect(
-            self._highlight_active_curve_toggled
-        )
-        self._update_highlight_active_curve_visuals()
         self.scale_offset_spin.valueChanged.connect(
             self._scale_offset_value_changed
         )
@@ -488,13 +475,13 @@ class DigitizationPanel(QWidget):
 
     @property
     def show_saved_curves(self) -> bool:
-        """Return hidden saved-curve visibility state (default: enabled)."""
-        return self.show_saved_check.isChecked()
+        """Saved curves are permanently visible in the digitization viewer."""
+        return True
 
     @property
     def dim_inactive_curves(self) -> bool:
-        """Return hidden inactive-curve dimming state (default: enabled)."""
-        return self.dim_inactive_check.isChecked()
+        """Saved curves are permanently rendered at full opacity."""
+        return False
 
     def set_curves(
         self,
@@ -803,38 +790,6 @@ class DigitizationPanel(QWidget):
             "Edit trace help",
             EDIT_MANUAL_HELP,
         )
-
-    def _highlight_active_curve_toggled(self, checked: bool) -> None:
-        """Expose the existing inactive-curve dimming as a visible UI mode."""
-        enabled = bool(checked)
-        previous = self.dim_inactive_check.blockSignals(True)
-        self.dim_inactive_check.setChecked(enabled)
-        self.dim_inactive_check.blockSignals(previous)
-        self._update_highlight_active_curve_visuals()
-        self.dimInactiveCurvesChanged.emit(enabled)
-
-    def _dim_inactive_check_toggled(self, checked: bool) -> None:
-        """Keep the legacy hidden checkbox synchronized with the visible button."""
-        enabled = bool(checked)
-        previous = self.highlight_active_curve_button.blockSignals(True)
-        self.highlight_active_curve_button.setChecked(enabled)
-        self.highlight_active_curve_button.blockSignals(previous)
-        self._update_highlight_active_curve_visuals()
-        self.dimInactiveCurvesChanged.emit(enabled)
-
-    def _update_highlight_active_curve_visuals(self) -> None:
-        """Render the focus mode clearly without changing any project data."""
-        if self.highlight_active_curve_button.isChecked():
-            self.highlight_active_curve_button.setIcon(highlighted_icon("eye"))
-            self.highlight_active_curve_button.setToolTip(
-                "Highlight active curve; other saved curves are shown "
-                "with reduced opacity."
-            )
-        else:
-            self.highlight_active_curve_button.setIcon(app_icon("eye"))
-            self.highlight_active_curve_button.setToolTip(
-                "Show all saved curves at full opacity."
-            )
 
     def _curve_changed(self, *_args) -> None:
         # Offset is a per-curve working state. Never carry it silently into a

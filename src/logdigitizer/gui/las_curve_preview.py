@@ -7,7 +7,14 @@ from collections.abc import Callable
 from math import ceil, floor, isfinite, log10
 
 from PySide6.QtCore import QLocale, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QTransform,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -16,10 +23,10 @@ from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsPathItem,
     QGraphicsScene,
+    QGraphicsTextItem,
     QGraphicsView,
     QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -129,6 +136,55 @@ class _NavigableTransitionMarker(QGraphicsPathItem):
 
 
 
+class _FixedScreenTextItem(QGraphicsTextItem):
+    """Text anchored in scene coordinates with a fixed pixel offset."""
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        color: QColor,
+        offset_x: float = 0.0,
+        offset_y: float = 0.0,
+    ) -> None:
+        super().__init__(str(text))
+        self.setDefaultTextColor(color)
+        self.setFlag(
+            QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
+            True,
+        )
+        self._offset_x = float(offset_x)
+        self._offset_y = float(offset_y)
+
+    def set_anchor(
+        self,
+        scene_x: float,
+        scene_y: float,
+        *,
+        horizontal: str = "left",
+        vertical: str = "top",
+    ) -> None:
+        """Place the item at a scene anchor plus a screen-space offset."""
+        rect = self.boundingRect()
+
+        local_x = self._offset_x
+        if horizontal == "center":
+            local_x -= rect.width() / 2.0
+        elif horizontal == "right":
+            local_x -= rect.width()
+
+        local_y = self._offset_y
+        if vertical == "center":
+            local_y -= rect.height() / 2.0
+        elif vertical == "bottom":
+            local_y -= rect.height()
+
+        self.setPos(float(scene_x), float(scene_y))
+        transform = QTransform()
+        transform.translate(local_x, local_y)
+        self.setTransform(transform)
+
+
 class LasCurveGraphicsView(QGraphicsView):
     """Interactive value-versus-depth plot drawn only with Qt graphics."""
 
@@ -142,6 +198,7 @@ class LasCurveGraphicsView(QGraphicsView):
     BOTTOM_MARGIN = 70.0
     MIN_DEPTH_STRETCH = 0.25
     MAX_DEPTH_STRETCH = 8.0
+    DEPTH_AXIS_PADDING_FRACTION = 0.02
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -467,15 +524,42 @@ class LasCurveGraphicsView(QGraphicsView):
             self.clear_curve("The selected LAS curve contains only NULL samples.")
             return
 
-        (
-            self._depth_min,
-            self._depth_max,
-            self.depth_ticks,
-        ) = self._nice_linear_axis(
-            min(self._depths),
-            max(self._depths),
+        valid_depths = tuple(
+            float(depth)
+            for depth, value in zip(self._depths, self._values)
+            if self._is_plottable_value(value)
+        )
+        if not valid_depths:
+            self.clear_curve("The selected LAS curve contains only NULL samples.")
+            return
+
+        curve_depth_min = min(valid_depths)
+        curve_depth_max = max(valid_depths)
+        curve_depth_span = curve_depth_max - curve_depth_min
+
+        if curve_depth_span <= 1e-12:
+            depth_padding = max(1.0, abs(curve_depth_min) * 0.02)
+        else:
+            depth_padding = max(
+                0.5,
+                curve_depth_span * self.DEPTH_AXIS_PADDING_FRACTION,
+            )
+
+        # Plot limits follow the useful depth range of the selected curve,
+        # not the overall LAS START/STOP. Ticks are computed independently.
+        self._depth_min = curve_depth_min - depth_padding
+        self._depth_max = curve_depth_max + depth_padding
+
+        _tick_axis_min, _tick_axis_max, depth_ticks = self._nice_linear_axis(
+            curve_depth_min,
+            curve_depth_max,
             target_ticks=7,
             minimum_step=1.0,
+        )
+        self.depth_ticks = tuple(
+            tick
+            for tick in depth_ticks
+            if self._depth_min <= tick <= self._depth_max
         )
 
         log_minor_ticks: tuple[float, ...] = ()
@@ -553,12 +637,17 @@ class LasCurveGraphicsView(QGraphicsView):
                 y,
                 grid_pen,
             )
-            label = scene.addText(self._format_tick(depth))
-            label.setDefaultTextColor(QColor("#4A5560"))
-            label_rect = label.boundingRect()
-            label.setPos(
-                plot_left - label_rect.width() - 8.0,
-                y - label_rect.height() / 2.0,
+            label = _FixedScreenTextItem(
+                self._format_tick(depth),
+                color=QColor("#4A5560"),
+                offset_x=-8.0,
+            )
+            scene.addItem(label)
+            label.set_anchor(
+                plot_left,
+                y,
+                horizontal="right",
+                vertical="center",
             )
 
         # Minor logarithmic X grid lines are intentionally unlabeled.
@@ -585,28 +674,47 @@ class LasCurveGraphicsView(QGraphicsView):
                 plot_top + plot_height,
                 grid_pen,
             )
-            label = scene.addText(self._format_tick(value))
-            label.setDefaultTextColor(QColor("#4A5560"))
-            label_rect = label.boundingRect()
-            label.setPos(
-                x - label_rect.width() / 2.0,
-                plot_top + plot_height + 5.0,
+            label = _FixedScreenTextItem(
+                self._format_tick(value),
+                color=QColor("#4A5560"),
+                offset_y=5.0,
+            )
+            scene.addItem(label)
+            label.set_anchor(
+                x,
+                plot_top + plot_height,
+                horizontal="center",
+                vertical="top",
             )
 
-        depth_title = scene.addText(f"Depth ({self._depth_unit})")
-        depth_title.setDefaultTextColor(QColor("#374151"))
+        depth_title = _FixedScreenTextItem(
+            f"Depth ({self._depth_unit})",
+            color=QColor("#374151"),
+            offset_x=-46.0,
+        )
+        scene.addItem(depth_title)
         depth_title.setRotation(-90.0)
-        depth_title.setPos(8.0, plot_top + plot_height / 2.0 + 45.0)
+        depth_title.set_anchor(
+            plot_left,
+            plot_top + plot_height / 2.0,
+            horizontal="center",
+            vertical="center",
+        )
 
         x_title_text = self._mnemonic
         if self._unit:
             x_title_text += f" ({self._unit})"
-        x_title = scene.addText(x_title_text)
-        x_title.setDefaultTextColor(self._curve_color)
-        x_rect = x_title.boundingRect()
-        x_title.setPos(
-            plot_left + (plot_width - x_rect.width()) / 2.0,
-            plot_top + plot_height + 36.0,
+        x_title = _FixedScreenTextItem(
+            x_title_text,
+            color=self._curve_color,
+            offset_y=34.0,
+        )
+        scene.addItem(x_title)
+        x_title.set_anchor(
+            plot_left + plot_width / 2.0,
+            plot_top + plot_height,
+            horizontal="center",
+            vertical="top",
         )
 
         path = QPainterPath()
@@ -838,24 +946,31 @@ class LasCurvePreviewDialog(QDialog):
         self.setModal(False)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.resize(1080, 780)
-        self.setMinimumSize(820, 600)
+        self.setMinimumSize(640, 600)
 
-        controls = QHBoxLayout()
-        controls.addWidget(QLabel("Curve"))
+        controls = QGridLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setHorizontalSpacing(8)
+        controls.setVerticalSpacing(6)
+        self.controls_layout = controls
+
+        controls.addWidget(QLabel("Curve"), 0, 0)
         self.curve_combo = QComboBox()
-        self.curve_combo.setMinimumWidth(230)
-        controls.addWidget(self.curve_combo)
+        self.curve_combo.setMinimumWidth(100)
+        self.curve_combo.setToolTip(
+            "Select the LAS curve. The full name and unit are available "
+            "in the item tooltip."
+        )
+        controls.addWidget(self.curve_combo, 0, 1)
 
-        controls.addSpacing(14)
-        controls.addWidget(QLabel("STEP"))
+        controls.addWidget(QLabel("STEP"), 0, 2)
         self.step_spin = CompactDoubleSpinBox()
         self.step_spin.setDecimals(12)
         self.step_spin.setRange(0.000000000001, 1_000_000_000.0)
         self.step_spin.setKeyboardTracking(False)
         self.step_spin.setAccelerated(True)
-        controls.addWidget(self.step_spin)
+        controls.addWidget(self.step_spin, 0, 3)
 
-        controls.addSpacing(14)
         self.refresh_button = QPushButton(
             app_icon("rotate"),
             "Refresh",
@@ -863,17 +978,16 @@ class LasCurvePreviewDialog(QDialog):
         self.refresh_button.setToolTip(
             "Rebuild the final LAS curve matrix from the current project."
         )
-        controls.addWidget(self.refresh_button)
-        controls.addSpacing(14)
+        controls.addWidget(self.refresh_button, 0, 4)
+
         self.show_qc_markers_check = QCheckBox("Show QC markers")
         self.show_qc_markers_check.setChecked(True)
         self.show_qc_markers_check.setToolTip(
             "Show scale changes, offset changes and unresolved LAS gaps."
         )
-        controls.addWidget(self.show_qc_markers_check)
+        controls.addWidget(self.show_qc_markers_check, 1, 0, 1, 2)
         # Compatibility alias for older external GUI tests/plugins.
         self.show_transitions_check = self.show_qc_markers_check
-        controls.addStretch(1)
 
         self.compress_button = QPushButton(
             app_icon("down-left-and-up-right-to-center"),
@@ -887,9 +1001,12 @@ class LasCurvePreviewDialog(QDialog):
             app_icon("expand"),
             "Fit full curve",
         )
-        controls.addWidget(self.compress_button)
-        controls.addWidget(self.stretch_button)
-        controls.addWidget(self.fit_button)
+        controls.addWidget(self.compress_button, 1, 2)
+        controls.addWidget(self.stretch_button, 1, 3)
+        controls.addWidget(self.fit_button, 1, 4)
+
+        controls.setColumnStretch(1, 1)
+        controls.setColumnStretch(5, 1)
 
         summary_group = QGroupBox("LAS reconstruction")
         summary_layout = QGridLayout(summary_group)
@@ -1057,12 +1174,20 @@ class LasCurvePreviewDialog(QDialog):
         self.curve_combo.clear()
         selected_index = 0
         for index, column in enumerate(plan.columns):
-            label = column.mnemonic
+            details = column.mnemonic
             if column.description:
-                label += f" — {column.description}"
+                details += f" — {column.description}"
             if column.unit:
-                label += f" [{column.unit}]"
-            self.curve_combo.addItem(label, column.curve_id)
+                details += f" [{column.unit}]"
+
+            # Keep the selector compact when the preview window is narrow.
+            # Full descriptive information remains available as a tooltip.
+            self.curve_combo.addItem(column.mnemonic, column.curve_id)
+            self.curve_combo.setItemData(
+                index,
+                details,
+                Qt.ItemDataRole.ToolTipRole,
+            )
             curve = self.service.get_curve(column.curve_id)
             item_color = QColor(curve.display_color)
             if item_color.isValid():
@@ -1105,6 +1230,14 @@ class LasCurvePreviewDialog(QDialog):
         )
         if column is None:
             return
+
+        tooltip = self.curve_combo.itemData(
+            self.curve_combo.currentIndex(),
+            Qt.ItemDataRole.ToolTipRole,
+        )
+        self.curve_combo.setToolTip(
+            str(tooltip) if tooltip else column.mnemonic
+        )
 
         values = tuple(plan.sampled.values_for(curve_id))
         depths = tuple(float(depth) for depth in plan.sampled.depths)

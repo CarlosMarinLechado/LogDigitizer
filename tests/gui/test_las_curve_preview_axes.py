@@ -7,6 +7,7 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("qtawesome")
 
 from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsTextItem
 
 from logdigitizer.domain.calibration import ScaleType
 from logdigitizer.gui.las_curve_preview import LasCurveGraphicsView
@@ -34,6 +35,31 @@ def test_linear_axes_use_clean_nice_ticks_and_curve_color(qtbot) -> None:
     assert all(
         view._format_tick(tick) == str(int(tick))
         for tick in view.depth_ticks
+    )
+
+    # The first/last useful samples sit slightly inside the plotting area.
+    first_y = view.scene_y_for_depth(min(depths))
+    last_y = view.scene_y_for_depth(max(depths))
+    assert first_y is not None
+    assert last_y is not None
+    assert first_y > view.TOP_MARGIN
+    assert last_y < (
+        view.TOP_MARGIN
+        + view.BASE_PLOT_HEIGHT * view.depth_stretch
+    )
+
+    # Axis labels and titles keep a constant readable on-screen size when the
+    # view is zoomed, fitted or depth-compressed/stretched.
+    text_items = [
+        item
+        for item in view.scene().items()
+        if isinstance(item, QGraphicsTextItem)
+    ]
+    assert text_items
+    assert all(
+        item.flags()
+        & QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations
+        for item in text_items
     )
 
 
@@ -82,3 +108,33 @@ def test_small_linear_ranges_keep_clean_decimal_ticks_when_needed(qtbot) -> None
     # is allowed to retain sensible decimal ticks.
     assert all(float(tick).is_integer() for tick in view.depth_ticks)
     assert any(not float(tick).is_integer() for tick in view.value_ticks)
+
+
+def test_depth_axis_uses_only_valid_curve_interval_and_independent_ticks(
+    qtbot,
+) -> None:
+    view = LasCurveGraphicsView()
+    qtbot.addWidget(view)
+
+    depths = tuple(float(value) for value in range(0, 1301, 100))
+    values = tuple(
+        None if depth < 200.0 else float(index + 1)
+        for index, depth in enumerate(depths)
+    )
+
+    view.set_curve(
+        depths=depths,
+        values=values,
+        mnemonic="ILD",
+        unit="OHMM",
+        depth_unit="m",
+        color="#FF00FF",
+        scale_type=ScaleType.LOGARITHMIC,
+    )
+
+    # Overall LAS depth starts at 0 m, but this selected curve starts at 200 m.
+    assert view._depth_min < 200.0
+    assert view._depth_min > 0.0
+    assert view._depth_max > 1300.0
+    assert view.depth_ticks[0] >= 200.0
+    assert 0.0 not in view.depth_ticks
