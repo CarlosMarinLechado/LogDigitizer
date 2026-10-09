@@ -1,45 +1,84 @@
-# Log Digitizer
+# LogDigitizer
 
-Log Digitizer is a scientific desktop application for converting scanned
-historical geophysical and petrophysical logs into calibrated digital curves.
-It is designed for logs that may be distributed across several scanned images,
-which the application manages as segments of a single project.
+LogDigitizer is an open-source scientific desktop application for recovering
+quantitative geophysical and petrophysical well-log curves from scanned legacy
+raster images and exporting the reconstructed data in LAS 2.0 format.
 
-The software was originally conceived and developed by **Carlos Marín
-Lechado** at the **Centro Nacional Instituto Geológico y Minero de España
+It is designed for historical logs that may be distributed across several
+scanned images, which are managed as segments of a single project.
+
+The software was originally conceived and developed by **Carlos Marín Lechado**
+at the **Centro Nacional Instituto Geológico y Minero de España
 (CN IGME-CSIC)**.
 
 ## Main features
 
-- Project-based management of scanned logs and image segments.
-- Four-point image rectification and tonal enhancement.
+- Project-based management of scanned well logs and multiple image segments.
+- Four-point image rectification and multipoint geometric correction.
+- Image enhancement and preprocessing tools.
 - Multipoint depth calibration.
 - Independent horizontal calibration for each curve.
+- Support for linear and logarithmic curve scales.
 - Support for additional curve scales and complete-scale offsets.
 - Semi-automatic minimum-cost curve tracking with guided corrections.
-- Manual digitization, node editing, undo and redo.
-- Assembly and review of digitized sections across overlapping segments.
+- Manual digitization with editable nodes and PCHIP interpolation.
+- Assembly of digitized sections across overlapping image segments.
+- Pre-export quality control for detecting gaps and missing intervals.
+- Automatic interpolation of short gaps where appropriate.
+- Direct navigation to intervals requiring review.
+- LAS Curve Preview for visual inspection of assembled curves.
 - Export of selected curves in LAS 2.0 format.
 - Integrated access to the PDF User Guide.
 
+## Workflow
+
+The typical LogDigitizer workflow consists of six stages:
+
+1. Project and image management
+2. Preprocessing
+3. Calibration
+4. Digitization
+5. Quality Control
+6. LAS export
+
+The workflow is iterative, allowing users to return to previous stages whenever
+additional corrections or adjustments are required.
+
 ## Project status
 
-LogDigitizer has been implemented and packaged for Windows.
-The repository is currently private while licensing and public release
-arrangements are being finalised.
+LogDigitizer has been implemented, validated and packaged for Windows.
 
-The source version is defined in `src/logdigitizer/__init__.py`.
+The source code is publicly available in this repository and the software is
+distributed as free and open-source software under the European Union Public
+Licence (EUPL), version 1.2 only.
 
-The current source version is `1.0.1`.
+The source version is defined in:
 
-## Requirements
+`src/logdigitizer/__init__.py`
 
-- Python 3.11 or later. Python 3.12 is recommended for the current build.
+The current release is **v1.1.0**.
+
+## Windows installation
+
+A packaged Windows installer is available from the GitHub Releases section of
+this repository.
+
+The installer provides a standalone version of LogDigitizer and does not
+require users to install Python or the application dependencies separately.
+
+## Requirements for running from source
+
+- Python 3.11 or later.
+- Python 3.12 is recommended for the current build.
 - A graphical desktop environment supported by Qt.
 
-Direct application dependencies are listed in
-`requirements-runtime.txt`. Testing and packaging tools are listed in
-`requirements-dev.txt`.
+Direct application dependencies are listed in:
+
+`requirements-runtime.txt`
+
+Testing and packaging tools are listed in:
+
+`requirements-dev.txt`
 
 ## Installation from source on Windows
 
@@ -50,84 +89,26 @@ py -3.12 -m venv .venv
 & ".\.venv\Scripts\python.exe" -m pip install --upgrade pip
 & ".\.venv\Scripts\python.exe" -m pip install -r requirements-dev.txt
 & ".\.venv\Scripts\python.exe" -m pip install --editable . --no-deps
-```
-
-These commands call the virtual-environment interpreter directly, so activating
-PowerShell scripts is not required.
-
-## Running the application
-
-```powershell
-& ".\.venv\Scripts\python.exe" -m logdigitizer.app
-```
-
-After the editable installation, the console entry point can also be used:
-
-```powershell
-& ".\.venv\Scripts\logdigitizer.exe"
-```
-
-## Running the tests
-
-```powershell
-& ".\.venv\Scripts\python.exe" -m pytest
-```
-
-The pytest configuration is stored in `pyproject.toml`; a separate
-`pytest.ini` file is not required.
-
-## Documentation
-
-The current User Guide is located at:
-
-```text
-docs/LogDigitizer_User_Guide.pdf
-```
-
-It can also be opened from **Help → User Guide** within the application.
-
-## Repository structure
-
-```text
-.
-├── docs/                         User Guide
-├── src/logdigitizer/             Application source code and resources
-├── tests/                        Automated test suite
-├── pyproject.toml                Project and pytest configuration
-├── requirements-runtime.txt     Application dependencies
-└── requirements-dev.txt         Test and packaging dependencies
-```
-
-## Licence
-
-The software licence is currently under review and has not yet been
-finalised. This repository is being maintained privately pending that
-decision.
-
-Licensing terms for the software and documentation will be confirmed
-before any public release. Third-party components remain subject to
-their respective licences.
 
 ## Citation
 
-A scientific article describing Log Digitizer is planned. Once it is
-published, it will become the preferred reference for scientific citation.
-Until then, cite the specific software version used. The definitive citation
-metadata will be maintained in `CITATION.cff`.
+If you use LogDigitizer in scientific work, please cite the software version used:
 
-Suggested provisional format:
+> Marín Lechado, C. (2026). *LogDigitizer* (Version 1.1.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.23263539
 
-> Marín-Lechado, C. (year). *Log Digitizer* (Version X.Y.Z) [Computer
-> software]. Instituto Geológico y Minero de España (IGME-CSIC). Software
-> version DOI.
+Citation metadata are also available in [`CITATION.cff`](CITATION.cff).
 
-## Author and credits
+## Licence
 
-**Original author and sole developer**
+LogDigitizer is free and open-source software distributed under the
+**European Union Public Licence (EUPL), version 1.2 only**.
 
-Carlos Marín Lechado  
-Centro Nacional Instituto Geológico y Minero de España (CN IGME-CSIC)  
-Agencia Estatal Consejo Superior de Investigaciones Científicas, M.P. (CSIC)
+See the [`LICENSE`](LICENSE) file for the full licence terms.
 
-Future contributors will be identified in `AUTHORS.md` and in the repository
-contribution history.
+The LogDigitizer User Guide and associated documentation are distributed
+under the **Creative Commons Attribution 4.0 International (CC BY 4.0)**
+licence, unless otherwise stated.
+
+Third-party libraries, components and other external materials remain subject
+to their respective licences.
+

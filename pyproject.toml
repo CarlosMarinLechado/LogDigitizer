@@ -1,16 +1,35 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
+
 [project]
-name = "digitalizacion-logs"
+name = "logdigitizer"
 dynamic = ["version"]
-description = "Scientific desktop application for digitizing scanned historical geophysical/petrophysical logs."
+
+description = "Open-source scientific desktop application for recovering quantitative well-log curves from scanned legacy raster images."
+
 readme = "README.md"
+
 requires-python = ">=3.11"
+
+license = "EUPL-1.2"
+license-files = ["LICENSE"]
+
 authors = [
   {name = "Carlos Marín Lechado"}
 ]
+
+keywords = [
+  "well logs",
+  "geophysics",
+  "petrophysics",
+  "raster digitization",
+  "legacy data",
+  "LAS 2.0",
+  "scientific software"
+]
+
 dependencies = [
   "PySide6>=6.7",
   "QtAwesome>=1.4.2",
@@ -19,6 +38,7 @@ dependencies = [
   "scipy>=1.13",
 ]
 
+
 [project.optional-dependencies]
 test = [
   "pytest>=8",
@@ -26,14 +46,25 @@ test = [
   "Pillow>=10",
 ]
 
+
+[project.urls]
+Homepage = "https://github.com/CarlosMarinLechado/LogDigitizer"
+Repository = "https://github.com/CarlosMarinLechado/LogDigitizer"
+Documentation = "https://github.com/CarlosMarinLechado/LogDigitizer/blob/main/docs/LogDigitizer_User_Guide.pdf"
+Issues = "https://github.com/CarlosMarinLechado/LogDigitizer/issues"
+
+
 [project.scripts]
 logdigitizer = "logdigitizer.app:main"
+
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+
 [tool.setuptools.dynamic]
 version = {attr = "logdigitizer.__version__"}
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

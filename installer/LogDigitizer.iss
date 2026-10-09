@@ -1,9 +1,10 @@
-; Inno Setup script for Log Digitizer 1.1.0
+; Inno Setup script for LogDigitizer 1.1.0
 ; Compile this file only after rebuilding dist\LogDigitizer with PyInstaller.
 
-#define MyAppName "Log Digitizer"
+#define MyAppName "LogDigitizer"
 #define MyAppVersion "1.1.0"
-#define MyAppPublisher "IGME-CSIC"
+#define MyAppPublisher "CN IGME-CSIC"
+#define MyAppURL "https://github.com/CarlosMarinLechado/LogDigitizer"
 #define MyAppExeName "LogDigitizer.exe"
 #define MyAppGuideName "LogDigitizer_User_Guide.pdf"
 
@@ -13,6 +14,9 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
+AppSupportURL={#MyAppURL}
+AppUpdatesURL={#MyAppURL}
 AppCopyright=Copyright (C) 2026 Carlos Marín Lechado
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
@@ -24,6 +28,7 @@ MinVersion=10.0.17763
 OutputDir=..\installer_output
 OutputBaseFilename=LogDigitizer_Setup_{#MyAppVersion}
 SetupIconFile=..\assets\LogDigitizer.ico
+LicenseFile=..\LICENSE
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
@@ -51,6 +56,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; The manual is installed at {app}\docs instead of being duplicated in _internal.
 Source: "..\dist\LogDigitizer\*"; DestDir: "{app}"; Excludes: "_internal\docs\{#MyAppGuideName}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\docs\{#MyAppGuideName}"; DestDir: "{app}\docs"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\CITATION.cff"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"

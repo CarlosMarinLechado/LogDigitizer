@@ -3209,12 +3209,14 @@ class MainWindow(QMainWindow):
             "About LogDigitizer",
             (
                 "<b>LogDigitizer</b><br>"
-                f"Development version {__version__}<br><br>"
-                "Scientific desktop software for digitizing "
-                "scanned historical logs.<br>"
-                "Initial author: Carlos Marín Lechado<br>"
-                "Initially linked to IGME-CSIC.<br><br>"
-                "License and scientific citation are not yet finalized."
+                f"Version {__version__}<br><br>"
+                "Open-source scientific desktop software for recovering "
+                "quantitative well-log curves from scanned legacy raster images.<br><br>"
+                "Author: Carlos Marín Lechado<br>"
+                "Centro Nacional Instituto Geológico y Minero de España "
+                "(CN IGME-CSIC)<br><br>"
+                "<b>License:</b> European Union Public Licence (EUPL) v1.2 only<br>"
+                "<b>Citation:</b> see CITATION.cff"
             ),
         )
 

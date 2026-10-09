@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: >
+  If you use LogDigitizer in scientific work, please cite the software
+  using the citation information provided in this file.
+
+title: "LogDigitizer"
+type: software
+
+authors:
+  - family-names: "Marín Lechado"
+    given-names: "Carlos"
+    affiliation: "Centro Nacional Instituto Geológico y Minero de España (CN IGME-CSIC)"
+
+version: "1.1.0"
+date-released: 2026-09-11
+
+license: "EUPL-1.2"
+
+repository-code: "https://github.com/CarlosMarinLechado/LogDigitizer"
+url: "https://github.com/CarlosMarinLechado/LogDigitizer"
+doi: "10.5281/zenodo.23263539"
+
+abstract: >
+  LogDigitizer is an open-source scientific desktop application for recovering
+  quantitative geophysical and petrophysical well-log curves from scanned
+  legacy raster images. It provides image preprocessing and rectification,
+  depth and curve calibration, manual and semi-automatic digitization,
+  quality control, curve preview, and export to LAS 2.0 format.
+
+keywords:
+  - well logs
+  - legacy data
+  - raster digitization
+  - geophysics
+  - petrophysics
+  - LAS 2.0
+  - scientific software
